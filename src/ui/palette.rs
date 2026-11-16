@@ -75,11 +75,7 @@ impl Palette {
             if add.on_disabled_hover_text("Un modelo admite 255 colores como mucho").clicked() {
                 // Parte del color elegido: se ajusta luego con el selector de arriba.
                 let base = palette.get(at).copied().unwrap_or([128, 128, 128]);
-                let mut rgb = base;
-                while palette.contains(&rgb) {
-                    rgb[1] = rgb[1].wrapping_add(8);
-                }
-                self.add_color(doc, rgb);
+                self.add_color(doc, fresh_color(&palette, base));
             }
         });
     }
@@ -189,6 +185,20 @@ impl Palette {
 }
 
 /// Cubo isométrico: tapa clara, lado izquierdo medio y derecho oscuro (como las tres bandas del toon).
+/// Un color que no esté ya en la paleta, lo más cerca posible de `base` (se ajusta luego con el selector).
+pub fn fresh_color(palette: &[[u8; 3]], base: [u8; 3]) -> [u8; 3] {
+    // 765 candidatos distintos (cada canal, de 1 a 255 pasos) y la paleta tiene 255 como mucho: siempre hay uno.
+    (1..=255u8)
+        .flat_map(|d| (0..3).map(move |c| (d, c)))
+        .map(|(d, c)| {
+            let mut rgb = base;
+            rgb[c] = rgb[c].wrapping_add(d.wrapping_mul(8) | 1);
+            rgb
+        })
+        .find(|rgb| !palette.contains(rgb))
+        .unwrap_or(base)
+}
+
 fn model_len(doc: &crate::edit::Doc) -> usize {
     doc.model.as_ref().map_or(0, |m| m.palette.len())
 }

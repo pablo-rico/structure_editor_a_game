@@ -112,6 +112,26 @@ pub fn models_root(agame_root: &Path) -> PathBuf {
     agame_root.join("Assets/_Game/Art")
 }
 
+/// Dónde apunta la copia de recuperación de un modelo: la ruta del fichero del juego que se estaba editando.
+fn model_recovery_origin() -> PathBuf {
+    crate::platform::data_dir().join("recuperacion_model.txt")
+}
+
+/// Fichero en que se guarda un modelo a partir de lo que devuelve el diálogo de guardar: el juego los busca por
+/// nombre, así que siempre es `<nombre>_model.json`. Si al corregir el nombre cae encima de otro modelo (por el que el
+/// diálogo no ha preguntado), error.
+pub fn model_target(picked: &Path) -> Result<PathBuf> {
+    let file = picked.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let stem = file.trim_end_matches(".json").trim_end_matches("_model");
+    anyhow::ensure!(!stem.is_empty(), "el modelo necesita un nombre");
+    let target = picked.with_file_name(format!("{stem}_model.json"));
+    anyhow::ensure!(
+        target == picked || !target.exists(),
+        "ya hay un modelo del juego que se llama «{stem}». Elige otro nombre, o ábrelo y edítalo."
+    );
+    Ok(target)
+}
+
 fn disk_stamp(path: &Path) -> Option<(SystemTime, u64)> {
     let m = std::fs::metadata(path).ok()?;
     Some((m.modified().ok()?, m.len()))
@@ -177,14 +197,28 @@ impl Editor {
 
     /// Abre un modelo de vóxeles del juego. La copia de recuperación se abre sin ruta (hay que decir dónde guardarla).
     pub fn open_model(&mut self, path: &Path) -> Result<()> {
-        let text = std::fs::read_to_string(path).with_context(|| format!("no puedo leer {}", path.display()))?;
+        if path == model_recovery_path() {
+            // La copia de recuperación vuelve a su fichero del juego, si se sabe cuál era.
+            let origin = std::fs::read_to_string(model_recovery_origin()).ok().map(|t| PathBuf::from(t.trim())).filter(|p| p.is_absolute());
+            return self.open_model_as(path, origin);
+        }
+        self.open_model_as(path, Some(path.to_path_buf()))
+    }
+
+    /// Abre el modelo de `file` como si fuera el de `doc_path` (una copia de recuperación); con `None`, sin fichero.
+    pub fn open_model_as(&mut self, file: &Path, doc_path: Option<PathBuf>) -> Result<()> {
+        let text = std::fs::read_to_string(file).with_context(|| format!("no puedo leer {}", file.display()))?;
         let (model, s) = vmodel::load(&text)?;
-        let recovered = path == model_recovery_path();
         let size = s.grid.size;
-        self.set_doc(Doc::new_model(model, s, (!recovered).then(|| path.to_path_buf())));
-        self.disk = disk_stamp(path).filter(|_| !recovered);
+        let own = doc_path.as_deref() == Some(file);
+        self.set_doc(Doc::new_model(model, s, doc_path.clone()));
+        self.disk = doc_path.as_deref().and_then(disk_stamp);
         self.opened_size = Some(size);
+        self.model_new = doc_path.is_none();
         self.model_checks();
+        if let Some(doc) = self.doc.as_mut() {
+            doc.unsaved = !own;
+        }
         Ok(())
     }
 
@@ -220,6 +254,11 @@ impl Editor {
     }
 
     fn set_doc(&mut self, doc: Doc) {
+        // Entre un modelo y una estructura no se pega nada: unos bytes son colores y los otros, materiales.
+        if self.doc.as_ref().is_none_or(|d| d.is_model() != doc.is_model()) {
+            self.tools.clipboard = None;
+            self.tools.hand = None;
+        }
         self.disk = None;
         self.opened_size = None;
         self.model_new = false;
@@ -319,7 +358,11 @@ impl Editor {
         if doc.unsaved && self.recovered_at.elapsed() >= RECOVER_EVERY {
             self.recovered_at = Instant::now();
             let copy = match &doc.model {
-                Some(m) => (Some(model_recovery_path()), vmodel::save(m, &doc.s)),
+                Some(m) => {
+                    let origin = doc.path.as_ref().map_or_else(String::new, |p| p.display().to_string());
+                    let _ = std::fs::write(model_recovery_origin(), origin);
+                    (Some(model_recovery_path()), vmodel::save(m, &doc.s))
+                }
                 None => (recovery_path(), agvox::save(&doc.meta, &doc.s, materials)),
             };
             if let (Some(path), Ok(text)) = copy {
@@ -353,7 +396,9 @@ impl Editor {
 
     /// Hay copia de recuperación de una sesión anterior.
     pub fn recovery_available() -> Option<PathBuf> {
-        recovery_path().filter(|p| p.is_file()).or_else(|| Some(model_recovery_path()).filter(|p| p.is_file()))
+        // La más reciente de las dos copias (estructura o modelo).
+        let modified = |p: &PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        [recovery_path(), Some(model_recovery_path())].into_iter().flatten().filter(|p| p.is_file()).max_by_key(modified)
     }
 }
 
@@ -439,6 +484,52 @@ mod tests {
         assert!(ed.changed_on_disk());
         ed.save(None, &[]).unwrap();
         assert!(!ed.changed_on_disk());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn el_nombre_al_guardar_no_pisa_otro_modelo() {
+        let (dir, path) = chest_dir("nombre");
+        // Lo que devuelve el diálogo se lleva a `<nombre>_model.json`.
+        assert_eq!(model_target(&dir.join("farol.json")).unwrap(), dir.join("farol_model.json"));
+        assert_eq!(model_target(&dir.join("farol")).unwrap(), dir.join("farol_model.json"));
+        assert_eq!(model_target(&dir.join("farol_model.json")).unwrap(), dir.join("farol_model.json"));
+        // Elegir el propio fichero (el diálogo ya preguntó si reemplazarlo) vale.
+        assert_eq!(model_target(&path).unwrap(), path);
+        // Escribir «chest_0» no puede acabar encima del cofre sin que nadie pregunte.
+        assert!(model_target(&dir.join("chest_0.json")).is_err());
+        assert!(model_target(&dir.join("chest_0")).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn la_copia_de_recuperacion_vuelve_a_su_fichero() {
+        let (dir, path) = chest_dir("recuperar");
+        let copy = dir.join("recuperacion_model.json");
+        std::fs::copy(&path, &copy).unwrap();
+        let mut ed = Editor::default();
+        ed.open_model_as(&copy, Some(path.clone())).unwrap();
+        let doc = ed.doc.as_ref().unwrap();
+        assert_eq!(doc.path.as_deref(), Some(path.as_path()));
+        assert_eq!(doc.meta.name, "chest_0");
+        assert!(doc.unsaved, "lo recuperado aún no está en su fichero");
+        assert!(!ed.changed_on_disk());
+        // Sin saber de dónde venía, se abre sin ruta.
+        ed.open_model_as(&copy, None).unwrap();
+        assert!(ed.doc.as_ref().unwrap().path.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cambiar_de_documento_vacia_el_portapapeles() {
+        let (dir, path) = chest_dir("portapapeles");
+        let mut ed = Editor::default();
+        ed.open_model(&path).unwrap();
+        ed.tools.selection = Some(([0, 0, 0], [3, 3, 3]));
+        assert!(ed.tools.copy(ed.doc.as_ref().unwrap()));
+        // Los bytes de un modelo son colores y los de una estructura, materiales: no se mezclan.
+        ed.fork(&Structure { grid: VoxelGrid::new([8, 8, 8]), ..Default::default() }, "x".into(), String::new());
+        assert!(ed.tools.clipboard.is_none() && ed.tools.hand.is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

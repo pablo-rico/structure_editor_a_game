@@ -66,6 +66,8 @@ struct Gesture {
 pub(super) struct EditUi {
     /// Modelos: dónde van el centro y los racimos de la copa de un árbol mixto (guías, no se editan).
     pub guides: Vec<[i32; 3]>,
+    /// Lo último abierto era un modelo (al volver a una estructura se quitan sus ajustes).
+    was_model: bool,
     pub tools_cat: Vec<ToolInfo>,
     params: HashMap<String, BTreeMap<String, i64>>,
     pub furniture: Option<FurnitureCatalog>,
@@ -219,6 +221,15 @@ impl State {
 
     /// Tras abrir o crear: modo Editar, encuadrar, planta «Todo», fantasma encendido y Aspecto del documento.
     pub(super) fn after_open(&mut self) {
+        // Al volver de un modelo a una estructura, lo que era solo de modelos no se queda puesto.
+        if self.ed.was_model && !self.is_model() {
+            self.ed.was_model = false;
+            self.ed.guides.clear();
+            self.editor.tools.face_only = false;
+            self.editor.tools.brush = self.editor.tools.brush.min(SUB);
+            self.editor.palette.selected = 0;
+            self.edit_view.layers = crate::render::Layers::default();
+        }
         self.mode = AppMode::Edit;
         self.cancel_build();
         self.ed.floor = None;
@@ -242,7 +253,10 @@ impl State {
 
     pub(super) fn ask_open(&mut self) {
         let dir = source_dir(&self.host.paths.agame_root);
-        let Some(path) = rfd::FileDialog::new().add_filter("Estructura a mano", &["agvox"]).set_directory(&dir).pick_file()
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Estructura a mano o modelo", &["agvox", "json"])
+            .set_directory(&dir)
+            .pick_file()
         else {
             return;
         };
@@ -297,10 +311,11 @@ impl State {
             else {
                 return;
             };
-            // El juego busca los modelos por su nombre: siempre `<nombre>_model.json`.
-            let file = p.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-            let stem = file.trim_end_matches(".json").trim_end_matches("_model");
-            Some(p.with_file_name(format!("{stem}_model.json")))
+            // El juego busca los modelos por su nombre: siempre `<nombre>_model.json`, sin pisar otro por el camino.
+            match crate::editor::model_target(&p) {
+                Ok(target) => Some(target),
+                Err(e) => return self.toasts.push(ToastKind::Error, format!("No se ha guardado: {e:#}"), None),
+            }
         } else {
             None
         };
@@ -314,7 +329,8 @@ impl State {
                     let file = p.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
                     doc.meta.name = file.trim_end_matches("_model.json").to_string();
                 }
-                self.ed.library.refresh(&self.host.paths.agame_root, &[], true);
+                let materials = self.materials();
+                self.ed.library.refresh(&self.host.paths.agame_root, &materials, true);
                 let shown = p.strip_prefix(&self.host.paths.agame_root).unwrap_or(&p).display().to_string();
                 self.toasts.push(ToastKind::Ok, format!("Guardado en el juego: {shown}"), Some(p));
             }
@@ -464,6 +480,7 @@ impl State {
         self.edit_view.layers = crate::render::Layers { grid: true, ..crate::render::Layers::none() };
         let path = self.editor.doc.as_ref().and_then(|d| d.path.clone());
         self.ed.guides = path.map(|p| crate::vmodel::canopy_guides(&p)).unwrap_or_default();
+        self.ed.was_model = true;
         self.after_open();
     }
 
@@ -706,10 +723,16 @@ impl State {
 
     /// Coge un mueble del juego (lo pide al generador ya girado).
     fn take_piece(&mut self, id: &str, facing: i32) {
+        if self.is_model() {
+            return self.toasts.push(ToastKind::Info, "Las piezas son para edificios: en un modelo no se colocan.", None);
+        }
         self.host.stamp(format!("mano:{id}:{facing}"), id, facing, None, 0);
     }
 
     fn take_stamp(&mut self, path: &std::path::Path) {
+        if self.is_model() {
+            return self.toasts.push(ToastKind::Info, "Los sellos son para edificios: en un modelo no se colocan.", None);
+        }
         let materials = self.materials();
         match std::fs::read_to_string(path).map_err(anyhow::Error::from).and_then(|t| agvox::load(&t, &materials)) {
             Ok((meta, s)) => {

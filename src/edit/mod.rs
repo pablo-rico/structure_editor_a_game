@@ -156,7 +156,7 @@ impl Doc {
     /// deja de tener color propio. Dentro del trazo en curso (abre uno si no hay).
     pub fn paint_face(&mut self, v: [i32; 3], dir: u8, color: u8) {
         let base = self.s.grid.get(v[0], v[1], v[2]);
-        if base == 0 || dir > 5 {
+        if base == 0 || dir > 5 || !self.is_model() {
             return;
         }
         if self.stroke.is_none() {
@@ -176,6 +176,18 @@ impl Doc {
         }
         self.model = Some(after.clone());
         self.version += 1;
+        // Cambios seguidos del mismo campo (arrastrar un color o un número) se funden en un paso.
+        let recent = self.last_extras.is_some_and(|t| t.elapsed() < MERGE_EXTRAS);
+        self.last_extras = Some(Instant::now());
+        if recent
+            && self.redo.is_empty()
+            && let Some((l, Step::Model(_, last))) = self.undo.last_mut()
+            && l == label
+        {
+            **last = after;
+            self.unsaved = true;
+            return;
+        }
         self.push(label.into(), Step::Model(Box::new(before), Box::new(after)));
     }
 
@@ -608,6 +620,43 @@ mod tests {
         d.edit_model("Llenar", |m| m.palette.resize(crate::vmodel::MAX_COLORS, [9, 9, 9]));
         assert!(!p.add_color(&mut d, [4, 5, 6]));
         assert_eq!(d.model.as_ref().unwrap().palette.len(), crate::vmodel::MAX_COLORS);
+    }
+
+    #[test]
+    fn las_estructuras_no_tienen_caras_propias() {
+        let mut d = doc();
+        d.paint(1, 1, 1, 3, false);
+        d.end_stroke();
+        d.paint_face([1, 1, 1], 2, 5);
+        d.end_stroke();
+        assert!(d.s.face_colors.is_empty());
+        assert_eq!(d.history().count(), 1);
+    }
+
+    #[test]
+    fn arrastrar_un_color_es_un_solo_paso() {
+        let mut d = chest();
+        let old = d.model.as_ref().unwrap().palette[0];
+        for g in 1..=20u8 {
+            d.edit_model("Cambiar color", |m| m.palette[0] = [1, g, 3]);
+        }
+        assert_eq!(d.history().count(), 1, "arrastre fundido en un paso");
+        d.edit_model("Punto de apoyo", |m| m.origin = Some([1, 0, 1]));
+        assert_eq!(d.history().count(), 2, "otro cambio es otro paso");
+        d.undo();
+        d.undo();
+        assert_eq!(d.model.as_ref().unwrap().palette[0], old);
+    }
+
+    #[test]
+    fn un_color_nuevo_siempre_aparece() {
+        // Todos los verdes de 8 en 8 ya están: antes esto no terminaba nunca.
+        let base = [10, 0, 10];
+        let palette: Vec<[u8; 3]> = (0..32u8).map(|k| [10, k * 8, 10]).collect();
+        let c = crate::ui::palette::fresh_color(&palette, base);
+        assert!(!palette.contains(&c));
+        let full: Vec<[u8; 3]> = (0..255u8).map(|k| [k, k, k]).collect();
+        assert!(!full.contains(&crate::ui::palette::fresh_color(&full, [7, 7, 7])));
     }
 
     #[test]

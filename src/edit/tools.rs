@@ -471,6 +471,8 @@ impl Tools {
                 }
             }
             Tool::Move => self.step_move(doc, p),
+            // Las piezas son de edificio (materiales, no colores): en un modelo no se colocan.
+            Tool::Place if doc.is_model() => {}
             Tool::Place => {
                 if p.pressed
                     && let (Some(h), Some(at)) = (&self.hand, p.place)
@@ -490,7 +492,7 @@ impl Tools {
         if p.pressed
             && let (Some((min, max)), Some(from)) = (self.selection, at)
         {
-            let clip = Clip::copy(&doc.s.grid, min, max);
+            let clip = Clip::copy_from(&doc.s, min, max);
             doc.begin_stroke("Mover");
             for v in ops::cuboid(min, max) {
                 doc.paint(v[0], v[1], v[2], 0, false);
@@ -649,6 +651,33 @@ mod tests {
         t.step(&mut s, &click([1, 0, 1]));
         assert_eq!(s.s.grid.get(1, 0, 1), 5);
         assert!(s.s.face_colors.is_empty());
+    }
+
+    #[test]
+    fn colocar_no_vale_en_un_modelo() {
+        let mut d = chest();
+        let before = d.s.grid.clone();
+        let clip = Clip { size: [1, 1, 1], data: vec![40], detail: vec![0], faces: Default::default() };
+        let hand = Hand { name: "mueble".into(), clip, interactables: Vec::new(), anchor: [0, 0, 0], furniture: None, facing: 3 };
+        let mut t = Tools { tool: Tool::Place, hand: Some(hand), ..Default::default() };
+        let top = d.s.grid.size[1] - 1;
+        t.step(&mut d, &click([2, top, 2]));
+        assert_eq!(d.s.grid, before, "un material de edificio no es un color del modelo");
+        assert!(!d.can_undo());
+    }
+
+    #[test]
+    fn mover_con_la_herramienta_conserva_sombreado() {
+        let mut d = chest();
+        let before = d.s.face_colors.clone();
+        let size = d.s.grid.size;
+        assert!(d.resize_model([size[0] + 2, size[1], size[2]]));
+        let mut t = Tools { tool: Tool::Move, selection: Some(([0, 0, 0], [size[0] - 1, size[1] - 1, size[2] - 1])), ..Default::default() };
+        t.step(&mut d, &Pointer { hit: Some(([0, 0, 0], [0, 1, 0])), pressed: true, down: true, ..Default::default() });
+        t.step(&mut d, &Pointer { hit: Some(([1, 0, 0], [0, 1, 0])), down: true, released: true, ..Default::default() });
+        assert_eq!(d.s.face_colors.len(), before.len(), "el sombreado viaja con lo movido");
+        let (v, own) = shaded_top(&d);
+        assert_eq!(before.get(&face_key([v[0] - 1, v[1], v[2]], 2)), Some(&own));
     }
 
     #[test]
