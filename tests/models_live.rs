@@ -10,7 +10,10 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
         let p = e.path();
         if p.is_dir() {
             collect(&p, out);
-        } else if p.file_name().is_some_and(|n| n.to_string_lossy().ends_with("_model.json")) {
+        } else if p
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().ends_with("_model.json"))
+        {
             out.push(p);
         }
     }
@@ -19,7 +22,9 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 #[test]
 #[ignore]
 fn los_280_ida_y_vuelta() {
-    let root = std::env::var("AGAME_ROOT").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("../a_game"));
+    let root = std::env::var("AGAME_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("../a_game"));
     let mut files = Vec::new();
     collect(&root.join("Assets/_Game/Art"), &mut files);
     assert!(files.len() >= 280, "solo he visto {} modelos", files.len());
@@ -31,10 +36,20 @@ fn los_280_ida_y_vuelta() {
             Ok(got) if got == want => {}
             Ok(got) => {
                 let line = got.lines().zip(want.lines()).position(|(a, b)| a != b);
-                bad.push(format!("{}: distinto en la línea {:?}", f.display(), line.map(|l| l + 1)));
+                bad.push(format!(
+                    "{}: distinto en la línea {:?}",
+                    f.display(),
+                    line.map(|l| l + 1)
+                ));
             }
             Err(e) => bad.push(format!("{}: {e:#}", f.display())),
         }
     }
-    assert!(bad.is_empty(), "{} de {} no vuelven iguales:\n{}", bad.len(), files.len(), bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "{} de {} no vuelven iguales:\n{}",
+        bad.len(),
+        files.len(),
+        bad.join("\n")
+    );
 }

@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use anyhow::{Context, Result, ensure};
 
 use crate::bridge::proto::Rgb;
+use crate::mesh::Paint;
 use crate::model::{FaceColors, Structure, VoxelGrid, face_key, face_unkey};
 
 /// Lo que el editor antepone a `_` al guardar: los scripts de arte de a_game se saltan los modelos que la llevan.
@@ -16,7 +17,14 @@ pub const MAX_COLORS: usize = 255;
 /// Lado máximo en vóxeles (el de `vox::MAX`; `face_key` reserva 8 bits por eje).
 pub const MAX_SIDE: i32 = 256;
 /// Normal de cada dirección de cara (`VoxelModel.Normals`): `+x −x +y −y +z −z`.
-pub const DIRS: [[i32; 3]; 6] = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+pub const DIRS: [[i32; 3]; 6] = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+];
 
 /// Lo que un modelo tiene además de sus vóxeles.
 #[derive(Clone, Debug, PartialEq)]
@@ -42,15 +50,35 @@ impl Model {
             "{{\n  \"_\": \"{EDITED_MARK}Modelo nuevo.\",\n  \"cell\": 16,\n  \"level\": 16,\n  \"size\": [{},{},{}],\n  \"palette\": [],\n  ",
             size[0], size[1], size[2]
         );
-        let model = Model { cell: 16, level: 16, palette: vec![[128, 128, 128]], origin: None, head, crlf: false, order: Vec::new() };
-        let s = Structure { grid: VoxelGrid::new(size), model_cell: Some(16), ..Default::default() };
+        let model = Model {
+            cell: 16,
+            level: 16,
+            palette: vec![[128, 128, 128]],
+            origin: None,
+            head,
+            crlf: false,
+            order: Vec::new(),
+        };
+        let s = Structure {
+            grid: VoxelGrid::new(size),
+            model_cell: Some(16),
+            ..Default::default()
+        };
         (model, s)
     }
 
     fn raw_note(&self) -> &str {
-        let Some(at) = self.head.find("\"_\": \"") else { return "" };
+        let Some(at) = self.head.find("\"_\": \"") else {
+            return "";
+        };
         let rest = &self.head[at + 6..];
         &rest[..rest.find("\",\n").unwrap_or(rest.len())]
+    }
+
+    /// Con qué se pinta: la paleta (el byte 0 es aire) y sin tono por sub-cubo.
+    pub fn paint(&self) -> Paint {
+        let palette = std::iter::once([255, 0, 255]).chain(self.palette.iter().copied()).collect();
+        Paint { palette, hidden: None, flat: true }
     }
 
     /// Ya se guardó alguna vez desde el editor.
@@ -66,11 +94,15 @@ impl Model {
 }
 
 fn ints<const N: usize>(v: &serde_json::Value, what: &str) -> Result<[i32; N]> {
-    let a = v.as_array().with_context(|| format!("al modelo le falta «{what}»"))?;
+    let a = v
+        .as_array()
+        .with_context(|| format!("al modelo le falta «{what}»"))?;
     ensure!(a.len() == N, "«{what}» debería tener {N} números");
     let mut out = [0; N];
     for (o, n) in out.iter_mut().zip(a) {
-        *o = n.as_i64().with_context(|| format!("«{what}» debería ser de enteros"))? as i32;
+        *o = n
+            .as_i64()
+            .with_context(|| format!("«{what}» debería ser de enteros"))? as i32;
     }
     Ok(out)
 }
@@ -100,22 +132,34 @@ fn exposed(g: &VoxelGrid) -> Vec<([i32; 3], u8)> {
 pub fn load(text: &str) -> Result<(Model, Structure)> {
     let crlf = text.contains("\r\n");
     let text = text.replace("\r\n", "\n");
-    let json: serde_json::Value =
-        serde_json::from_str(&text).context("no es un modelo de vóxeles (no se puede leer como JSON)")?;
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .context("no es un modelo de vóxeles (no se puede leer como JSON)")?;
     let cell = json["cell"].as_i64().unwrap_or(0) as i32;
     let level = json["level"].as_i64().unwrap_or(0) as i32;
-    ensure!(cell > 0 && level > 0, "al modelo le falta cuántos vóxeles tiene por casilla y por nivel");
+    ensure!(
+        cell > 0 && level > 0,
+        "al modelo le falta cuántos vóxeles tiene por casilla y por nivel"
+    );
     let size: [i32; 3] = ints(&json["size"], "size")?;
     ensure!(
         size.iter().all(|&s| (1..=MAX_SIDE).contains(&s)),
         "tamaño no válido: {size:?} (de 1 a {MAX_SIDE} por lado)"
     );
-    let colors = json["palette"].as_array().context("el modelo no tiene paleta")?;
-    ensure!(colors.len() <= MAX_COLORS, "el modelo tiene {} colores y el máximo es {MAX_COLORS}", colors.len());
+    let colors = json["palette"]
+        .as_array()
+        .context("el modelo no tiene paleta")?;
+    ensure!(
+        colors.len() <= MAX_COLORS,
+        "el modelo tiene {} colores y el máximo es {MAX_COLORS}",
+        colors.len()
+    );
     let mut palette = Vec::with_capacity(colors.len());
     for c in colors {
         let hex = c.as_str().unwrap_or("");
-        ensure!(hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()), "color no válido en la paleta: «{hex}»");
+        ensure!(
+            hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+            "color no válido en la paleta: «{hex}»"
+        );
         let n = u32::from_str_radix(hex, 16)?;
         palette.push([(n >> 16) as u8, (n >> 8) as u8, n as u8]);
     }
@@ -123,8 +167,13 @@ pub fn load(text: &str) -> Result<(Model, Structure)> {
         v if v.as_array().is_some_and(|a| a.len() == 3) => Some(ints(v, "origin")?),
         _ => None,
     };
-    let raw = json["faces"].as_array().context("el modelo no tiene caras")?;
-    ensure!(raw.len() % 5 == 0, "las caras del modelo no van de cinco en cinco números");
+    let raw = json["faces"]
+        .as_array()
+        .context("el modelo no tiene caras")?;
+    ensure!(
+        raw.len() % 5 == 0,
+        "las caras del modelo no van de cinco en cinco números"
+    );
     let head_len = text.find("\"faces\"").context("el modelo no tiene caras")?;
 
     // Caras: clave → índice de color, y el orden en que venían.
@@ -133,15 +182,25 @@ pub fn load(text: &str) -> Result<(Model, Structure)> {
     for f in raw.chunks(5) {
         let n: Vec<i64> = f.iter().map(|v| v.as_i64().unwrap_or(-1)).collect();
         let v = [n[0] as i32, n[1] as i32, n[2] as i32];
-        ensure!((0..3).all(|i| (0..size[i] as i64).contains(&n[i])), "hay una cara fuera del modelo: {v:?}");
-        ensure!((0..6).contains(&n[3]), "hay una cara con una dirección que no existe: {}", n[3]);
+        ensure!(
+            (0..3).all(|i| (0..size[i] as i64).contains(&n[i])),
+            "hay una cara fuera del modelo: {v:?}"
+        );
+        ensure!(
+            (0..6).contains(&n[3]),
+            "hay una cara con una dirección que no existe: {}",
+            n[3]
+        );
         ensure!(
             (0..palette.len() as i64).contains(&n[4]),
             "hay una cara con un color que no está en la paleta: {}",
             n[4]
         );
         let key = face_key(v, n[3] as u8);
-        ensure!(faces.insert(key, n[4] as u8).is_none(), "hay una cara repetida en {v:?}");
+        ensure!(
+            faces.insert(key, n[4] as u8).is_none(),
+            "hay una cara repetida en {v:?}"
+        );
         order.push(key);
     }
 
@@ -153,7 +212,11 @@ pub fn load(text: &str) -> Result<(Model, Structure)> {
         let (v, d) = face_unkey(key);
         if d < 2 {
             let row = rows.entry((v[1], v[2])).or_default();
-            if d == 1 { row.0.push(v[0]) } else { row.1.push(v[0]) }
+            if d == 1 {
+                row.0.push(v[0])
+            } else {
+                row.1.push(v[0])
+            }
         }
     }
     for ((y, z), (mut open, mut close)) in rows {
@@ -170,9 +233,15 @@ pub fn load(text: &str) -> Result<(Model, Structure)> {
     // Las caras del sólido tienen que ser exactamente las del fichero (las de abajo en y = 0 no cuentan).
     let shell = exposed(&solid);
     for (v, d) in &shell {
-        ensure!(faces.contains_key(&face_key(*v, *d)), "{OPEN}: falta una cara en {v:?}");
+        ensure!(
+            faces.contains_key(&face_key(*v, *d)),
+            "{OPEN}: falta una cara en {v:?}"
+        );
     }
-    let bottoms = order.iter().filter(|&&k| matches!(face_unkey(k), (v, 3) if v[1] == 0)).count();
+    let bottoms = order
+        .iter()
+        .filter(|&&k| matches!(face_unkey(k), (v, 3) if v[1] == 0))
+        .count();
     ensure!(shell.len() == order.len() - bottoms, "{OPEN}: sobran caras");
 
     // Color de cada vóxel con caras: el más frecuente; en empate, el de arriba si empata y si no el de índice menor.
@@ -191,7 +260,13 @@ pub fn load(text: &str) -> Result<(Model, Structure)> {
         let best = cs.iter().flatten().map(|&c| count(c)).max().unwrap_or(0);
         let color = match cs[2] {
             Some(top) if count(top) == best => top,
-            _ => cs.iter().flatten().copied().filter(|&c| count(c) == best).min().unwrap_or(0),
+            _ => cs
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|&c| count(c) == best)
+                .min()
+                .unwrap_or(0),
         };
         grid.set(v[0], v[1], v[2], color + 1);
         for (d, c) in cs.iter().enumerate() {
@@ -215,16 +290,37 @@ pub fn load(text: &str) -> Result<(Model, Structure)> {
     if palette.is_empty() {
         palette.push([128, 128, 128]); // siempre hay un color con el que pintar; sin usar, no se escribe
     }
-    let model = Model { cell, level, palette, origin, head: text[..head_len].to_string(), crlf, order };
-    let s = Structure { grid, face_colors, model_cell: Some(cell), ..Default::default() };
+    let model = Model {
+        cell,
+        level,
+        palette,
+        origin,
+        head: text[..head_len].to_string(),
+        crlf,
+        order,
+    };
+    let s = Structure {
+        grid,
+        face_colors,
+        model_cell: Some(cell),
+        ..Default::default()
+    };
     Ok((model, s))
 }
 
 /// Cambia en la cabecera el valor (una lista en una línea) de `key`.
 fn set_array(head: &mut String, key: &str, value: &str) -> Result<()> {
-    let at = head.find(&format!("\"{key}\":")).with_context(|| format!("al modelo le falta «{key}»"))?;
-    let open = at + head[at..].find('[').with_context(|| format!("«{key}» no es una lista"))?;
-    let close = open + head[open..].find(']').with_context(|| format!("«{key}» no se cierra"))?;
+    let at = head
+        .find(&format!("\"{key}\":"))
+        .with_context(|| format!("al modelo le falta «{key}»"))?;
+    let open = at
+        + head[at..]
+            .find('[')
+            .with_context(|| format!("«{key}» no es una lista"))?;
+    let close = open
+        + head[open..]
+            .find(']')
+            .with_context(|| format!("«{key}» no se cierra"))?;
     head.replace_range(open..=close, value);
     Ok(())
 }
@@ -233,17 +329,37 @@ fn set_array(head: &mut String, key: &str, value: &str) -> Result<()> {
 /// que siguen existiendo en su orden y las nuevas al final por (y, z, x, dirección).
 pub fn save(model: &Model, s: &Structure) -> Result<String> {
     let g = &s.grid;
-    ensure!(g.size.iter().all(|&n| (1..=MAX_SIDE).contains(&n)), "tamaño no válido: {:?}", g.size);
+    ensure!(
+        g.size.iter().all(|&n| (1..=MAX_SIDE).contains(&n)),
+        "tamaño no válido: {:?}",
+        g.size
+    );
     let mut colors: HashMap<u32, u8> = HashMap::new();
     for (v, d) in exposed(g) {
         let key = face_key(v, d);
-        let b = s.face_colors.get(&key).copied().unwrap_or_else(|| g.get(v[0], v[1], v[2]));
-        ensure!((1..=model.palette.len()).contains(&(b as usize)), "hay un vóxel con un color que no está en la paleta");
+        let b = s
+            .face_colors
+            .get(&key)
+            .copied()
+            .unwrap_or_else(|| g.get(v[0], v[1], v[2]));
+        ensure!(
+            (1..=model.palette.len()).contains(&(b as usize)),
+            "hay un vóxel con un color que no está en la paleta"
+        );
         colors.insert(key, b);
     }
-    let mut keys: Vec<u32> = model.order.iter().copied().filter(|k| colors.contains_key(k)).collect();
+    let mut keys: Vec<u32> = model
+        .order
+        .iter()
+        .copied()
+        .filter(|k| colors.contains_key(k))
+        .collect();
     let kept: HashSet<u32> = keys.iter().copied().collect();
-    let mut new: Vec<u32> = colors.keys().copied().filter(|k| !kept.contains(k)).collect();
+    let mut new: Vec<u32> = colors
+        .keys()
+        .copied()
+        .filter(|k| !kept.contains(k))
+        .collect();
     new.sort_unstable_by_key(|&k| {
         let (v, d) = face_unkey(k);
         (v[1], v[2], v[0], d)
@@ -262,14 +378,22 @@ pub fn save(model: &Model, s: &Structure) -> Result<String> {
     }
 
     let mut head = model.head.clone();
-    set_array(&mut head, "size", &format!("[{},{},{}]", g.size[0], g.size[1], g.size[2]))?;
+    set_array(
+        &mut head,
+        "size",
+        &format!("[{},{},{}]", g.size[0], g.size[1], g.size[2]),
+    )?;
     set_array(&mut head, "palette", &format!("[{}]", hexes.join(",")))?;
     if let Some(o) = model.origin {
         let value = format!("[{},{},{}]", o[0], o[1], o[2]);
         if head.contains("\"origin\":") {
             set_array(&mut head, "origin", &value)?;
         } else {
-            head = head.replacen("  \"palette\":", &format!("  \"origin\": {value},\n  \"palette\":"), 1);
+            head = head.replacen(
+                "  \"palette\":",
+                &format!("  \"origin\": {value},\n  \"palette\":"),
+                1,
+            );
         }
     }
     if !model.edited() {
@@ -282,7 +406,10 @@ pub fn save(model: &Model, s: &Structure) -> Result<String> {
         .iter()
         .map(|&k| {
             let (v, d) = face_unkey(k);
-            format!("    {}, {}, {}, {}, {}", v[0], v[1], v[2], d, index[colors[&k] as usize])
+            format!(
+                "    {}, {}, {}, {}, {}",
+                v[0], v[1], v[2], d, index[colors[&k] as usize]
+            )
         })
         .collect();
     let mut out = head;
@@ -292,14 +419,19 @@ pub fn save(model: &Model, s: &Structure) -> Result<String> {
         out.push('\n');
     }
     out.push_str("  ]\n}\n");
-    Ok(if model.crlf { out.replace('\n', "\r\n") } else { out })
+    Ok(if model.crlf {
+        out.replace('\n', "\r\n")
+    } else {
+        out
+    })
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
 
-    pub(crate) const MINERAL: &str = include_str!("../fixtures/models/mineral_nickel_grass_small_model.json");
+    pub(crate) const MINERAL: &str =
+        include_str!("../fixtures/models/mineral_nickel_grass_small_model.json");
     pub(crate) const CHEST: &str = include_str!("../fixtures/models/chest_0_model.json");
     const INKWELL: &str = include_str!("../fixtures/models/pbk_inkwell_model.json");
     const COVER: &str = include_str!("../fixtures/models/pbk_cover_l_model.json");
@@ -317,7 +449,10 @@ pub(crate) mod tests {
     /// Un modelo mínimo con el formato de los scripts.
     fn mk(size: [i32; 3], palette: &[&str], faces: &[[i32; 5]]) -> String {
         let pal: Vec<String> = palette.iter().map(|c| format!("\"{c}\"")).collect();
-        let fs: Vec<String> = faces.iter().map(|f| format!("    {}, {}, {}, {}, {}", f[0], f[1], f[2], f[3], f[4])).collect();
+        let fs: Vec<String> = faces
+            .iter()
+            .map(|f| format!("    {}, {}, {}, {}, {}", f[0], f[1], f[2], f[3], f[4]))
+            .collect();
         format!(
             "{{\n  \"_\": \"prueba\",\n  \"cell\": 16,\n  \"level\": 16,\n  \"size\": [{},{},{}],\n  \"palette\": [{}],\n  \"faces\": [\n{}\n  ]\n}}\n",
             size[0],
@@ -331,13 +466,25 @@ pub(crate) mod tests {
     /// Las caras de un texto de modelo, de 5 en 5.
     fn faces_of(text: &str) -> Vec<[i32; 5]> {
         let v: serde_json::Value = serde_json::from_str(text).unwrap();
-        let f: Vec<i32> = v["faces"].as_array().unwrap().iter().map(|n| n.as_i64().unwrap() as i32).collect();
-        f.chunks(5).map(|c| [c[0], c[1], c[2], c[3], c[4]]).collect()
+        let f: Vec<i32> = v["faces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n.as_i64().unwrap() as i32)
+            .collect();
+        f.chunks(5)
+            .map(|c| [c[0], c[1], c[2], c[3], c[4]])
+            .collect()
     }
 
     fn palette_of(text: &str) -> Vec<String> {
         let v: serde_json::Value = serde_json::from_str(text).unwrap();
-        v["palette"].as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect()
+        v["palette"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap().to_string())
+            .collect()
     }
 
     fn solids(s: &Structure) -> usize {
@@ -383,11 +530,18 @@ pub(crate) mod tests {
         for (open, close) in rows.values_mut() {
             open.sort();
             close.sort();
-            expected += open.iter().zip(close.iter()).map(|(a, b)| (b - a + 1) as usize).sum::<usize>();
+            expected += open
+                .iter()
+                .zip(close.iter())
+                .map(|(a, b)| (b - a + 1) as usize)
+                .sum::<usize>();
         }
         assert_eq!(solids(&s), expected);
         let faced: HashSet<[i32; 3]> = faces.iter().map(|f| [f[0], f[1], f[2]]).collect();
-        assert!(solids(&s) > faced.len(), "el cofre tiene vóxeles enterrados");
+        assert!(
+            solids(&s) > faced.len(),
+            "el cofre tiene vóxeles enterrados"
+        );
         for f in &faces {
             let n = DIRS[f[3] as usize];
             assert_ne!(s.grid.get(f[0], f[1], f[2]), 0);
@@ -400,15 +554,50 @@ pub(crate) mod tests {
         assert!(!load(&lf(CHEST)).unwrap().1.face_colors.is_empty());
         assert!(load(&lf(MINERAL)).unwrap().1.face_colors.is_empty());
         // Cinco caras del color 0 y la de arriba del 1: manda el más frecuente y la de arriba queda como propia.
-        let t = mk([1, 2, 1], &["101010", "202020"], &[[0, 1, 0, 0, 0], [0, 1, 0, 1, 0], [0, 1, 0, 2, 1], [0, 1, 0, 3, 0], [0, 1, 0, 4, 0], [0, 1, 0, 5, 0]]);
+        let t = mk(
+            [1, 2, 1],
+            &["101010", "202020"],
+            &[
+                [0, 1, 0, 0, 0],
+                [0, 1, 0, 1, 0],
+                [0, 1, 0, 2, 1],
+                [0, 1, 0, 3, 0],
+                [0, 1, 0, 4, 0],
+                [0, 1, 0, 5, 0],
+            ],
+        );
         let (_, s) = load(&t).unwrap();
         assert_eq!(s.grid.get(0, 1, 0), 1);
-        assert_eq!(s.face_colors, FaceColors::from([(face_key([0, 1, 0], 2), 2)]));
+        assert_eq!(
+            s.face_colors,
+            FaceColors::from([(face_key([0, 1, 0], 2), 2)])
+        );
         // Empate a tres: gana el de la cara de arriba.
-        let t = mk([1, 2, 1], &["101010", "202020", "303030"], &[[0, 1, 0, 0, 0], [0, 1, 0, 1, 0], [0, 1, 0, 2, 1], [0, 1, 0, 3, 1], [0, 1, 0, 4, 2], [0, 1, 0, 5, 2]]);
+        let t = mk(
+            [1, 2, 1],
+            &["101010", "202020", "303030"],
+            &[
+                [0, 1, 0, 0, 0],
+                [0, 1, 0, 1, 0],
+                [0, 1, 0, 2, 1],
+                [0, 1, 0, 3, 1],
+                [0, 1, 0, 4, 2],
+                [0, 1, 0, 5, 2],
+            ],
+        );
         assert_eq!(load(&t).unwrap().1.grid.get(0, 1, 0), 2);
         // Empate sin la de arriba entre los empatados: el de índice menor.
-        let t = mk([1, 1, 1], &["101010", "202020", "303030"], &[[0, 0, 0, 0, 1], [0, 0, 0, 1, 1], [0, 0, 0, 2, 0], [0, 0, 0, 4, 2], [0, 0, 0, 5, 2]]);
+        let t = mk(
+            [1, 1, 1],
+            &["101010", "202020", "303030"],
+            &[
+                [0, 0, 0, 0, 1],
+                [0, 0, 0, 1, 1],
+                [0, 0, 0, 2, 0],
+                [0, 0, 0, 4, 2],
+                [0, 0, 0, 5, 2],
+            ],
+        );
         assert_eq!(load(&t).unwrap().1.grid.get(0, 0, 0), 2);
     }
 
@@ -474,7 +663,11 @@ pub(crate) mod tests {
         let (m, mut s) = load(&t).unwrap();
         let before = faces_of(&t);
         // Un vóxel de superficie con un vecino sólido debajo.
-        let v = before.iter().find(|f| f[3] == 2 && s.grid.get(f[0], f[1] - 1, f[2]) != 0).map(|f| [f[0], f[1], f[2]]).unwrap();
+        let v = before
+            .iter()
+            .find(|f| f[3] == 2 && s.grid.get(f[0], f[1] - 1, f[2]) != 0)
+            .map(|f| [f[0], f[1], f[2]])
+            .unwrap();
         s.grid.set(v[0], v[1], v[2], 0);
         s.face_colors.retain(|k, _| face_unkey(*k).0 != v);
         let out = save(&m, &s).unwrap();
@@ -484,17 +677,27 @@ pub(crate) mod tests {
         let rgb = |f: &[i32; 5], pal: &[String]| pal[f[4] as usize].clone();
         let key = |f: &[i32; 5]| (f[0], f[1], f[2], f[3]);
         let kept: Vec<_> = before.iter().filter(|f| [f[0], f[1], f[2]] != v).collect();
-        assert!(after.len() > kept.len(), "al quitarlo quedan caras nuevas al aire");
+        assert!(
+            after.len() > kept.len(),
+            "al quitarlo quedan caras nuevas al aire"
+        );
         for (a, b) in after.iter().zip(&kept) {
             assert_eq!(key(a), key(b));
             assert_eq!(rgb(a, &pal_after), rgb(b, &pal_before));
         }
         let new = &after[kept.len()..];
-        assert!(new.windows(2).all(|w| (w[0][1], w[0][2], w[0][0], w[0][3]) < (w[1][1], w[1][2], w[1][0], w[1][3])));
+        assert!(
+            new.windows(2).all(
+                |w| (w[0][1], w[0][2], w[0][0], w[0][3]) < (w[1][1], w[1][2], w[1][0], w[1][3])
+            )
+        );
         for f in new {
             let b = s.grid.get(f[0], f[1], f[2]);
             let c = m.palette[b as usize - 1];
-            assert_eq!(rgb(f, &pal_after), format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2]));
+            assert_eq!(
+                rgb(f, &pal_after),
+                format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+            );
         }
     }
 
@@ -506,16 +709,29 @@ pub(crate) mod tests {
         let (m2, s2) = load(&out).unwrap();
         assert_eq!(s2.grid.size, [4, 4, 4]);
         assert_eq!(solids(&s2), 0);
-        assert!(!m2.palette.is_empty(), "siempre hay un color con el que pintar");
+        assert!(
+            !m2.palette.is_empty(),
+            "siempre hay un color con el que pintar"
+        );
         s.grid.set(1, 0, 1, 1);
         let out = save(&m, &s).unwrap();
-        assert_eq!(faces_of(&out).len(), 5, "un vóxel en el suelo: cinco caras, sin la de abajo");
+        assert_eq!(
+            faces_of(&out).len(),
+            5,
+            "un vóxel en el suelo: cinco caras, sin la de abajo"
+        );
         assert_eq!(palette_of(&out), ["808080"]);
     }
 
     #[test]
     fn rechaza_lo_que_no_cuadra() {
-        let cube = [[0, 0, 0, 0, 0], [0, 0, 0, 1, 0], [0, 0, 0, 2, 0], [0, 0, 0, 4, 0], [0, 0, 0, 5, 0]];
+        let cube = [
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 1, 0],
+            [0, 0, 0, 2, 0],
+            [0, 0, 0, 4, 0],
+            [0, 0, 0, 5, 0],
+        ];
         let ok = mk([1, 1, 1], &["101010"], &cube);
         assert!(load(&ok).is_ok());
         let mut dup = cube.to_vec();
@@ -538,7 +754,9 @@ pub(crate) mod tests {
             ("cell 0", ok.replace("\"cell\": 16", "\"cell\": 0")),
         ];
         for (what, text) in bad {
-            let e = load(&text).err().unwrap_or_else(|| panic!("debería rechazar: {what}"));
+            let e = load(&text)
+                .err()
+                .unwrap_or_else(|| panic!("debería rechazar: {what}"));
             assert!(!e.to_string().is_empty());
         }
     }

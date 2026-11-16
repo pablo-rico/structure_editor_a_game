@@ -130,6 +130,8 @@ fn cutaway(p: vec3<f32>, n: vec3<f32>, alpha: f32) -> f32 {
 
 // VoxelTone: hash u32 del sub-cubo y la cara.
 fn voxel_tone(uv: vec2<f32>, face: vec2<f32>) -> f32 {
+    // Semilla negativa: modelo, sin tono por sub-cubo (el juego los pinta lisos).
+    if (face.y < 0.0) { return 1.0; }
     let cell = vec2<u32>(floor(uv));
     var h = (cell.x * 0x9E3779B1u) ^ (cell.y * 0x85EBCA77u) ^ (u32(face.x) * 0xC2B2AE3Du) ^ (u32(face.y) * 0x27D4EB2Fu);
     h = h ^ (h >> 16u);

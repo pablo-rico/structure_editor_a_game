@@ -45,6 +45,8 @@ pub struct MeshData {
 pub struct Paint {
     pub palette: Vec<Rgb>,
     pub hidden: Option<u8>,
+    /// Sin el tono por sub-cubo (`VoxelTone`): los modelos del juego se pintan sin ruido.
+    pub flat: bool,
 }
 
 /// Lo que la vela toma del color del reino (`StructurePalette.SailTeamTint`).
@@ -71,6 +73,7 @@ impl Paint {
         Self {
             palette,
             hidden: index("Hidden").map(|i| i as u8),
+            flat: false,
         }
     }
 
@@ -105,7 +108,10 @@ pub fn build(s: &Structure, paint: &Paint) -> MeshData {
     let data = &g.data;
     let detail = g.detail.as_deref();
     let hidden = paint.hidden.map_or(-1, i32::from);
-    let seed = (s.seed & 0xFFFF) as f32;
+    // Semilla −1 = sin tono por sub-cubo (el shader la reconoce): así se pintan los modelos.
+    let seed = if paint.flat { -1.0 } else { (s.seed & 0xFFFF) as f32 };
+    // Caras con color propio (solo modelos): se mallan con ese color en vez del de su vóxel.
+    let own = (!s.face_colors.is_empty()).then_some(&s.face_colors);
     let ground_rows = (s.ground_level * SUB) as f32;
     let mut mask: Vec<i32> = Vec::new();
     for d in 0..3 {
@@ -115,6 +121,7 @@ pub fn build(s: &Structure, paint: &Paint) -> MeshData {
         let (su, sv) = (stride[u], stride[v]);
         for sign in [-1, 1] {
             let neighbour_offset = sign * stride[d];
+            let dir = (d * 2) as u8 + u8::from(sign < 0);
             for i in 0..size[d] {
                 // Fuera de la rejilla, el vecino es aire.
                 let neighbour_inside = (0..size[d]).contains(&(i + sign));
@@ -129,6 +136,15 @@ pub fn build(s: &Structure, paint: &Paint) -> MeshData {
                         let open =
                             !neighbour_inside || data[(index + neighbour_offset) as usize] == 0;
                         let mut key = if m != 0 && m != hidden && open { m } else { 0 };
+                        if key != 0
+                            && let Some(own) = own
+                        {
+                            let mut p = [0; 3];
+                            (p[d], p[u], p[v]) = (i, a, b);
+                            if let Some(&c) = own.get(&crate::model::face_key(p, dir)) {
+                                key = i32::from(c);
+                            }
+                        }
                         if key != 0 && detail.is_some_and(|dt| dt[index as usize] != 0) {
                             key |= DETAIL_KEY;
                         }
@@ -292,6 +308,7 @@ mod tests {
         Paint {
             palette,
             hidden: Some(HIDDEN),
+            flat: false,
         }
     }
 
@@ -322,6 +339,36 @@ mod tests {
 
     fn quads(m: &MeshData) -> usize {
         m.vertices.len() / 4
+    }
+
+    #[test]
+    fn cara_con_color_propio() {
+        let mut s = boxed(1, 1, 1);
+        s.face_colors.insert(crate::model::face_key([0, 0, 0], 2), PLANK);
+        let m = build(&s, &paint());
+        assert_eq!(quads(&m), 6);
+        for q in m.vertices.chunks(4) {
+            let want = if q[0].normal[1] > 0.5 { [0x9a, 0x6a, 0x3c, 255] } else { [0x7c, 0x7c, 0x84, 255] };
+            assert_eq!(q[0].color, want, "normal {:?}", q[0].normal);
+        }
+    }
+
+    #[test]
+    fn color_propio_no_se_funde() {
+        let mut s = boxed(2, 1, 1);
+        let top = |m: &MeshData| m.vertices.chunks(4).filter(|q| q[0].normal[1] > 0.5).count();
+        assert_eq!(top(&build(&s, &paint())), 1);
+        s.face_colors.insert(crate::model::face_key([1, 0, 0], 2), PLANK);
+        assert_eq!(top(&build(&s, &paint())), 2);
+    }
+
+    #[test]
+    fn plano_marca_la_semilla() {
+        let mut s = boxed(1, 1, 1);
+        s.seed = 0x1_0007;
+        assert!(build(&s, &paint()).vertices.iter().all(|v| v.face[1] == 7.0));
+        let flat = Paint { flat: true, ..paint() };
+        assert!(build(&s, &flat).vertices.iter().all(|v| v.face[1] == -1.0));
     }
 
     #[test]
