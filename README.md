@@ -133,7 +133,8 @@ piezas abiertas (fuentes, puestos) todavía no se pueden exportar.
 
 ## Publicar una versión
 
-Sube `version` en `Cargo.toml` (por ejemplo `0.1.0` → `0.2.0`) y haz push a la rama principal. El workflow
+Sube `version` en `Cargo.toml` (por ejemplo `0.1.0` → `0.2.0`), ejecuta `cargo check` para que `Cargo.lock` la recoja
+y haz commit de **los dos** y push a la rama principal (sin el lock al día, `cargo test --locked` falla). El workflow
 `.github/workflows/publicar.yml` ve que aún no existe el tag `v0.2.0`, pasa los tests, compila en Windows, macOS
 (binario universal) y Linux, y crea el tag y la release con los tres instaladores. Si la versión no cambia, no hace
 nada. También se puede lanzar a mano desde *Actions › Publicar versión*.

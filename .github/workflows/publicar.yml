@@ -1,6 +1,6 @@
 # Publica una versión del editor cuando cambia `version` en Cargo.toml.
 #
-# En cada push a la rama principal que toque Cargo.toml se lee la versión; si aún no existe el tag `v<versión>`, se
+# En cada push a la rama principal que toque Cargo.toml o Cargo.lock se lee la versión; si aún no existe el tag `v<versión>`, se
 # pasan los tests, se compila en Windows, macOS (binario universal) y Linux, y se crea el tag y la release con:
 #   Estructuras-<versión>-windows-x64.exe, Estructuras-<versión>-macos.dmg, Estructuras-<versión>-macos.app.zip y
 #   Estructuras-<versión>-linux-x64.sh.
@@ -10,7 +10,7 @@ name: Publicar versión
 on:
   push:
     branches: [main, master]
-    paths: [Cargo.toml]
+    paths: [Cargo.toml, Cargo.lock] # el lock también: subir solo el lock arreglado relanza la publicación
   workflow_dispatch:
 
 permissions:

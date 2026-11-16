@@ -103,8 +103,9 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
 
 ## Publicar una versión
 
-- La versión es `version` de `Cargo.toml` (sale en el título y en *Ayuda* con `CARGO_PKG_VERSION`). Subirla y hacer
-  push a `main`/`master` lanza `.github/workflows/publicar.yml`: si no existe el tag `v<versión>`, pasa `cargo test
+- La versión es `version` de `Cargo.toml` (sale en el título y en *Ayuda* con `CARGO_PKG_VERSION`). Al subirla,
+  `cargo check` y commit también de `Cargo.lock` (lleva la versión del paquete; si no, `--locked` falla en CI). El push a
+  `main`/`master` lanza `.github/workflows/publicar.yml`: si no existe el tag `v<versión>`, pasa `cargo test
   --locked` y publica tag y release con `.exe` (Windows), `.dmg` y `.app.zip` (macOS universal, firma ad hoc, sin
   notarizar) y `.sh` autoextraíble (Linux, compilado en ubuntu-22.04 por la glibc). Necesita `Cargo.lock` y
   `fixtures/` en el repo.
