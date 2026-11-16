@@ -55,6 +55,19 @@ impl VoxelGrid {
     }
 }
 
+/// Color propio de una cara de un modelo: clave [`face_key`], valor = byte de color como en la rejilla (índice de
+/// paleta + 1). Las estructuras no lo usan (mapa vacío).
+pub type FaceColors = std::collections::HashMap<u32, u8>;
+
+/// Clave de la cara `dir` (`+x −x +y −y +z −z`) del vóxel `v`: `x | y << 8 | z << 16 | dir << 24`.
+pub fn face_key(v: [i32; 3], dir: u8) -> u32 {
+    v[0] as u32 | (v[1] as u32) << 8 | (v[2] as u32) << 16 | (dir as u32) << 24
+}
+
+pub fn face_unkey(k: u32) -> ([i32; 3], u8) {
+    ([(k & 255) as i32, (k >> 8 & 255) as i32, (k >> 16 & 255) as i32], (k >> 24) as u8)
+}
+
 /// Navegación derivada de los sub-cubos (`StructureNav`), en el formato de la carga de `build`.
 #[derive(Clone, Debug, Default)]
 pub struct Nav {
@@ -116,6 +129,19 @@ pub struct Structure {
     pub checks: Vec<Check>,
     /// Nombre de la sustitución hecha a mano si lo construido no es el plano procedural del juego.
     pub override_by: Option<String>,
+    /// Solo modelos (`vmodel`): caras con un color distinto del de su vóxel (sombreado dibujado).
+    pub face_colors: FaceColors,
+    /// Solo modelos: vóxeles por casilla del modelo (`cell`). `None` en las estructuras.
+    pub model_cell: Option<i32>,
+}
+
+impl Structure {
+    /// Vóxeles por lado de celda: los del modelo o `SUB`.
+    // shortcut: el vóxel de un modelo se dibuja como un sub-cubo (el doble de grande que en el juego);
+    // parametrizar SUB si algún día se mezclan modelos y estructuras a escala real.
+    pub fn cell_size(&self) -> i32 {
+        self.model_cell.unwrap_or(SUB)
+    }
 }
 
 #[cfg(test)]

@@ -15,4 +15,5 @@ pub mod platform;
 pub mod render;
 pub mod theme;
 pub mod ui;
+pub mod vmodel;
 pub mod vox;

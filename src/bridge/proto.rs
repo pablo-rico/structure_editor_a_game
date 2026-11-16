@@ -422,6 +422,8 @@ pub fn decode_build(h: BuildHeader, payload: &[u8], seed: i32, grid: Option<Voxe
         },
         checks: h.checks,
         override_by,
+        face_colors: Default::default(),
+        model_cell: None,
     })
 }
 

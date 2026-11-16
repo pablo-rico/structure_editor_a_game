@@ -449,3 +449,36 @@ public static class AuthoredCasaDePrueba
 - Límite de la fase 2b: toda estructura a mano tiene que entrarse por su puerta y llegar a sus plantas (los checks de
   un tipo cerrado son errores, en `export` y en `AuthoredBlueprintTests`). Las piezas abiertas (fuentes, puestos)
   necesitarán un campo `open` en el `.agvox`.
+
+## Modelos (`*_model.json`)
+
+Los assets 3D del juego que no son estructuras (árboles, objetos, ruinas, muebles, intro, libro de política) son
+`VoxelModel` (`a_game/Assets/_Game/Scripts/Rendering/Terrain3D/VoxelModel.cs`, la referencia). **El puente no
+interviene**: `VoxelModel.cs` no corre fuera de Unity, así que el editor lee y escribe el fichero del juego
+directamente (`src/vmodel.rs`), y ese fichero es la única fuente (no hay `.agvox` de modelos).
+
+Campos: `cell` y `level` (vóxeles por casilla y por nivel, > 0), `size` `[x, y, z]`, `palette` (colores `rrggbb`),
+`faces` (cinco enteros por cara expuesta: `x, y, z`, dirección `0 +x, 1 −x, 2 +y, 3 −y, 4 +z, 5 −z` y color) y
+`origin` opcional (punto del modelo que cae en la esquina de la huella; puede ser negativo). El resto de claves (`_`,
+`pivot`, `hinge`, `pivotFlame`, `pageMin`, `pageMax`, `bookTilt`, `pivotBook`) no son del editor y se conservan tal cual.
+
+Al leer (mismas reglas que `VoxelModel.Parse`, más las del editor):
+
+- Cada cara dentro de `size`, con dirección 0–5 y color dentro de la paleta; sin caras repetidas. Límites del editor:
+  256 vóxeles por lado y 255 colores.
+- El sólido se reconstruye por filas: en cada `(y, z)`, una cara `−x` abre y una `+x` cierra. Las caras expuestas de
+  ese sólido tienen que ser exactamente las del fichero; las de abajo en `y = 0` nunca se escriben. Si no cuadra, el
+  modelo no se abre.
+- El color es por cara. El de un vóxel es el más frecuente entre sus caras (en empate, el de la cara de arriba si
+  empata; si no, el de índice menor); las caras que difieren van aparte (`Structure.face_colors`). Los vóxeles
+  enterrados heredan el color del vecino por el que se llega a ellos desde la superficie.
+
+Al escribir:
+
+- La cabecera original no se reserializa: solo cambian los valores de `size`, `palette` y `origin`, y `_` gana delante
+  la marca `A mano (editor de estructuras). ` (los scripts de arte de a_game se saltan los modelos que la llevan).
+- `palette`: solo los colores que lleva alguna cara, en su orden; los nuevos al final.
+- `faces`: una por línea (`    x, y, z, d, c`); las que ya estaban, en su orden original (no es uniforme entre
+  scripts); las nuevas al final por `(y, z, x, dirección)`. Se conserva el fin de línea del fichero.
+- Un modelo abierto y guardado sin tocar queda idéntico byte a byte salvo la marca (`tests/models_live.rs` lo
+  comprueba con todos los del juego).
