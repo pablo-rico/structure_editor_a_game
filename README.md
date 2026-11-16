@@ -100,6 +100,34 @@ o una altura. Mientras lo editas no se pueden cambiar el estilo, el tamaño ni l
 las medianeras deben quedar sin huecos y tiendas y bancos necesitan mostrador. En Explorar verás «Diseño editado a mano»
 con un botón para **ver el original**. «Convertir en estructura propia» deja de sustituirlo.
 
+## Modelos: árboles, objetos, intro…
+
+Lo que en el juego es 3D pero no es un edificio (árboles, rocas, cactus, cofres, ruinas, losas, el pilar de llegada y
+los modelos de la intro y del libro de política) son **modelos de vóxeles**: más finos que los sub-cubos (16 por
+casilla) y con colores libres en vez de materiales. Se editan igual que una estructura, con estas diferencias:
+
+- **Biblioteca › Modelos** los enseña por grupos, con buscador. Clic abre uno. «Nuevo modelo» empieza uno vacío e
+  «Importar de MagicaVoxel…» trae un `.vox` con sus colores tal cual.
+- **Paleta**: los colores del modelo. «Añadir color» pone uno nuevo; el selector de arriba cambia el color elegido en
+  todo el modelo. El magenta de los modelos de la intro es el «color de la nación» (el juego lo cambia por el del reino).
+- **Herramientas**: las Básicas. No hay Construir, muebles, plantas, puerta ni partes: son cosas de edificios.
+- **Sombreado dibujado**: muchos modelos (intro, ruinas, cofres, troncos) llevan luces y sombras pintadas cara a cara.
+  Lo que no tocas las conserva. Pintar o borrar un vóxel lo deja liso; con **Pintar › «Solo la cara»** pintas la cara
+  que señalas y no el vóxel entero. Mover, copiar, girar o reflejar una selección se lleva su sombreado.
+- **Guardar es llevarlo al juego** (Cmd+S o «GUARDAR EN EL JUEGO»): se escribe su fichero dentro de a_game y Unity lo
+  recarga solo. No hay «exportar». Si el fichero cambió en disco mientras lo tenías abierto, el editor pregunta antes
+  de pisarlo.
+- **Propiedades**: el tamaño crece o encoge por la derecha, por detrás y por arriba (lo que hay nunca se mueve de
+  sitio) y el **punto de apoyo** es el punto del modelo que cae en la esquina de su casilla.
+- **Troncos de árboles con copa de hojas**: las hojas no son vóxeles y no se editan aquí; los cubos fantasma marcan
+  dónde va cada racimo.
+- Un modelo retocado queda marcado, y los scripts de arte del juego ya no lo regeneran (hay que pedirlo a propósito con
+  `--pisar-editados`).
+
+Un **modelo nuevo no sale en el juego solo por existir**: programación tiene que enlazarlo a un objeto con su mismo
+nombre (la pestaña Validación lo recuerda). Lo mismo si cambias el **tamaño** de un modelo que ya existía: avisa, porque
+el juego tiene posiciones y pruebas que dependen de él. Los dibujos 2D con el mismo nombre que un modelo no se tocan.
+
 ## MagicaVoxel
 
 *Importar de MagicaVoxel…* abre un `.vox` (hasta 256 por lado): eliges qué lado da a la calle y el material del juego
@@ -129,6 +157,7 @@ piezas abiertas (fuentes, puestos) todavía no se pueden exportar.
 | Chip «Sin generador» | Falta dotnet, la versión de Unity del proyecto o la carpeta `Library` de a_game. El motivo sale al pasar el ratón por el chip. |
 | Chip «No compila (n)» | El código del juego tiene errores ahora mismo; sigues viendo la última versión buena. La consola (clic en el chip) tiene el detalle para programación. |
 | «Esta combinación ha fallado al generarse» | Un plano del juego falla con esos parámetros. El error completo está en la consola; en el Muestrario, clic derecho en la celda lo copia. |
+| Un modelo de la Biblioteca dice «No se puede abrir» | Su fichero no encierra un sólido o está a medio escribir. El motivo sale al pasar el ratón; el editor no lo abre para no guardarlo mal. |
 | Exportar da error | Hay errores en la validación de alguna estructura de `ArtSource/Structures`, o el a_game elegido no tiene la rama de estructuras a mano. |
 
 ## Publicar una versión

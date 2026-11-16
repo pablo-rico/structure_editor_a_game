@@ -385,3 +385,23 @@ Detalles de la tabla:
 - dorado en las insignias;
 - bloquear el visor mientras llega la vista previa;
 - volver de Borrar a Añadir sin avisar.
+
+## 11. Modelos (árboles, objetos, intro)
+
+Un modelo de vóxeles del juego se edita en el mismo modo Editar, quitando lo que es de edificios:
+
+- **Biblioteca › Modelos**: cuarta sección. Tarjetas como las de estructuras, agrupadas («Árboles», «Naturaleza y
+  objetos», «Ruinas y caminos», «Muebles y cofres», «Pilar de llegada», «Intro», «Libro de política») con el número de
+  cada grupo; debajo del nombre, sus medidas y «retocado» si ya se guardó desde el editor. Arriba, «Nuevo modelo» e
+  «Importar de MagicaVoxel…». Una tarjeta que no se puede abrir lo dice y explica por qué en el tooltip.
+- **Paleta**: muestras con los colores del modelo (el cubo isométrico de siempre), el elegido con cerco dorado; arriba,
+  el selector de color del elegido con su `#rrggbb` en mono; al final, «Añadir color».
+- **Tira de herramientas**: solo BÁSICAS. La barra contextual no tiene «Planta» ni «Detalle»; en Pintar con el lápiz
+  aparece el conmutador «Solo la cara».
+- **Barra superior**: un único botón primario, «GUARDAR EN EL JUEGO» (no hay exportar).
+- **Propiedades**: nombre (el del fichero, no editable), de qué script salió, tamaño en vóxeles con «Aplicar» y punto de
+  apoyo. **Validación**: solo avisos (modelo vacío, tamaño cambiado, modelo nuevo sin enlazar); sin ellos, una línea
+  verde.
+- **Visor**: sin el moteado por sub-cubo (el juego pinta los modelos lisos). Las guías de la copa de un tronco y el
+  punto de apoyo se dibujan como cubos fantasma (el apoyo, en rojo). La barra de estado da las medidas en vóxeles.
+- Nada de `cell`, `faces`, `origin` ni `palette` en pantalla: «casilla», «caras», «punto de apoyo», «colores».

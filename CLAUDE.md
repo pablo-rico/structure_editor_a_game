@@ -35,8 +35,8 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
 - Visor suelto: `cargo run --example visor` (ventana), `-- --shots` (PNG de las fixtures en `target-render/shots/`),
   `-- --egui` (un fotograma real de `Viewport::ui`).
 - **Ver la app sin permiso de grabación de pantalla:** `EDITOR_CAPTURA=/ruta.png [EDITOR_TIPO=Shop]
-  [EDITOR_MODO=editar] [EDITOR_BIBLIOTECA=estructuras|juego|piezas] [EDITOR_HERRAMIENTA=room] [EDITOR_BUSCAR=…]
-  [EDITOR_VOX=/ruta.vox] ./target/release/structure_editor_a_game` guarda la ventana cuando ya se ve la estructura y
+  [EDITOR_MODO=editar] [EDITOR_BIBLIOTECA=estructuras|juego|piezas|modelos] [EDITOR_HERRAMIENTA=room] [EDITOR_BUSCAR=…]
+  [EDITOR_VOX=/ruta.vox] [EDITOR_MODELO=/ruta_model.json] ./target/release/structure_editor_a_game` guarda la ventana cuando ya se ve la estructura y
   sale. Lee el PNG para revisar la interfaz.
 - Varios agentes a la vez: cada uno sus ficheros, su `CARGO_TARGET_DIR=target-<nombre>` (ignorado por git) y
   `rustfmt --edition 2024` solo sobre los suyos.
@@ -54,6 +54,10 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
   pixel-perfect) y picking por rayo DDA en CPU. `render_image` = imágenes fuera de pantalla (miniaturas, muestrario,
   capturas).
 - `src/params.rs`: parámetros de Explorar y estado de partes móviles. `src/labels.rs`: nombres en español.
+- `src/vmodel.rs`: modelos de vóxeles del juego (`*_model.json`: árboles, objetos, intro). Lee, reconstruye el sólido
+  desde las caras y escribe el fichero del juego, que es la única fuente (`docs/contrato.md`, «Modelos»). Un modelo
+  abierto es un `Doc` con `model: Some(..)`: rejilla con byte = color + 1 y `Structure.face_colors` para las caras con
+  color propio. El puente no interviene.
 - `src/agvox.rs`: formato `.agvox`. `src/edit/`: `Doc` (historial de diferencias dispersas por trazo, `version`),
   `ops` (formas, relleno, extruir, portapapeles con el giro de `RotateQuarter`), `tools` (máquina de estados de las
   herramientas). `src/editor.rs`: documento abierto, guardar/abrir, validación en vivo (300 ms), exportar, recuperación.
@@ -99,6 +103,14 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
   (`library::design_field`). El puente define `AGAME_OVERRIDES` solo si el a_game tiene sustituciones (`shortcut:` en el
   `.csproj`). Las herramientas de construcción las aplica el puente sobre el documento entero y devuelven el resultado
   completo: Rust lo enseña como vista previa y lo confirma con `Doc::apply_external` (un paso de deshacer).
+- **Modelos:** un modelo guardado sin tocar tiene que quedar idéntico byte a byte salvo la marca en `_`
+  (`cargo test --test models_live -- --ignored` lo comprueba con los 280 de a_game; pásalo si tocas `vmodel.rs`). El
+  orden de las caras **no** es uniforme entre scripts (se conserva el del fichero; las nuevas, al final) y en Windows
+  el árbol de trabajo va con CRLF (se conserva el fin de línea). El color es por cara: `Doc::paint` borra los colores
+  propios del vóxel y todo lo que mueva vóxeles tiene que llevárselos (`Clip::copy_from`). En la malla, semilla −1 =
+  sin `VoxelTone` (`Paint.flat`); el camino de las estructuras no cambia. Un vóxel de modelo se dibuja como un
+  sub-cubo (el doble de grande que en el juego): solo la rejilla y el pincel «Celda» leen `Structure::cell_size`.
+  Editar exige el catálogo del generador también para modelos.
 - **Fixtures:** ~9 MB (`schooltower.bin` es 7,6 MB). No las rehagas sin motivo.
 
 ## Publicar una versión

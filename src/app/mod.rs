@@ -876,7 +876,11 @@ impl State {
                 };
                 if let Some(s) = s {
                     let [sx, sy, sz] = s.grid.size;
-                    ui.label(mono(format!("{}×{} celdas · {} niveles", sx / SUB, sz / SUB, sy / SUB)));
+                    if s.model_cell.is_some() {
+                        ui.label(mono(format!("{sx}×{sz}×{sy} vóxeles")));
+                    } else {
+                        ui.label(mono(format!("{}×{} celdas · {} niveles", sx / SUB, sz / SUB, sy / SUB)));
+                    }
                 }
             });
         });
