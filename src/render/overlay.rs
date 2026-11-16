@@ -210,24 +210,27 @@ pub(crate) fn build(i: &Inputs) -> Overlay {
     let cell = SUB as f32;
 
     if layers.grid {
-        // Por celda en el suelo de fuera, más marcadas cada 4, con dos celdas de margen.
+        // Por celda en el suelo de fuera, más marcadas cada 4, con dos celdas de margen. La celda de un modelo es la
+        // suya (`cell_size`) y su tamaño no tiene por qué ser múltiplo: se redondea hacia arriba.
         let m = 2;
-        for k in -m..=cells_x + m {
+        let cs = s.cell_size();
+        let (gx, gz) = ((s.grid.size[0] + cs - 1) / cs, (s.grid.size[2] + cs - 1) / cs);
+        for k in -m..=gx + m {
             let a = if k.rem_euclid(4) == 0 { 0.55 } else { 0.35 };
-            let x = (k * SUB) as f32;
+            let x = (k * cs) as f32;
             o.plain.line(
-                w(x, ground, (-m * SUB) as f32),
-                w(x, ground, ((cells_z + m) * SUB) as f32),
+                w(x, ground, (-m * cs) as f32),
+                w(x, ground, ((gz + m) * cs) as f32),
                 rgba(ov::GRID, a),
                 NO_MASK,
             );
         }
-        for k in -m..=cells_z + m {
+        for k in -m..=gz + m {
             let a = if k.rem_euclid(4) == 0 { 0.55 } else { 0.35 };
-            let z = (k * SUB) as f32;
+            let z = (k * cs) as f32;
             o.plain.line(
-                w((-m * SUB) as f32, ground, z),
-                w(((cells_x + m) * SUB) as f32, ground, z),
+                w((-m * cs) as f32, ground, z),
+                w(((gx + m) * cs) as f32, ground, z),
                 rgba(ov::GRID, a),
                 NO_MASK,
             );

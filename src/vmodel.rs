@@ -6,7 +6,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::{Context, Result, ensure};
 
-use crate::bridge::proto::Rgb;
+use std::path::Path;
+
+use crate::bridge::proto::{Check, Rgb, Severity};
 use crate::mesh::Paint;
 use crate::model::{FaceColors, Structure, VoxelGrid, face_key, face_unkey};
 
@@ -25,6 +27,70 @@ pub const DIRS: [[i32; 3]; 6] = [
     [0, 0, 1],
     [0, 0, -1],
 ];
+
+/// Avisos de un modelo (pestaña Validación). No hay reglas de juego: solo lo que el artista tiene que saber.
+/// `opened_size` es el tamaño con que se abrió; `is_new`, que aún no existía en el juego.
+pub fn checks(s: &Structure, opened_size: Option<[i32; 3]>, is_new: bool) -> Vec<Check> {
+    let warn = |code: &str, message: &str| Check {
+        severity: Severity::Warning,
+        code: code.into(),
+        message: message.into(),
+        at: None,
+    };
+    let mut out = Vec::new();
+    if s.grid.data.iter().all(|&b| b == 0) {
+        out.push(warn(
+            "model-empty",
+            "El modelo está vacío: no se verá nada en el juego.",
+        ));
+    }
+    if opened_size.is_some_and(|size| size != s.grid.size) {
+        out.push(warn(
+            "model-size",
+            "Has cambiado el tamaño de un modelo del juego. Avisa a programación: hay posiciones y pruebas del juego que dependen de él.",
+        ));
+    }
+    if is_new {
+        out.push(warn(
+            "model-new",
+            "Es un modelo nuevo: para que salga en el juego, programación tiene que enlazarlo a un objeto con su mismo nombre.",
+        ));
+    }
+    out
+}
+
+/// Guías de la copa de un árbol mixto: el centro y cada racimo de hojas del `_canopy.json` que acompaña a un
+/// `_trunk_model.json`, en vóxeles del tronco. Solo se leen: las hojas no se editan aquí.
+pub fn canopy_guides(model_path: &Path) -> Vec<[i32; 3]> {
+    let name = model_path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let Some(stem) = name.strip_suffix("_trunk_model.json") else {
+        return Vec::new();
+    };
+    let Ok(text) =
+        std::fs::read_to_string(model_path.with_file_name(format!("{stem}_canopy.json")))
+    else {
+        return Vec::new();
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let num = |v: &serde_json::Value| v.as_f64().unwrap_or(0.0).round() as i32;
+    let mut out = Vec::new();
+    if let Some(c) = json["center"].as_array().filter(|c| c.len() == 3) {
+        out.push([num(&c[0]), num(&c[1]), num(&c[2])]);
+    }
+    for c in json["clumps"].as_array().into_iter().flatten() {
+        out.push([num(&c["x"]), num(&c["y"]), num(&c["z"])]);
+    }
+    out
+}
+
+/// Dirección de cara (0–5) de una normal.
+pub fn dir_of(normal: [i32; 3]) -> Option<u8> {
+    DIRS.iter().position(|d| *d == normal).map(|d| d as u8)
+}
 
 /// Lo que un modelo tiene además de sus vóxeles.
 #[derive(Clone, Debug, PartialEq)]
@@ -77,8 +143,14 @@ impl Model {
 
     /// Con qué se pinta: la paleta (el byte 0 es aire) y sin tono por sub-cubo.
     pub fn paint(&self) -> Paint {
-        let palette = std::iter::once([255, 0, 255]).chain(self.palette.iter().copied()).collect();
-        Paint { palette, hidden: None, flat: true }
+        let palette = std::iter::once([255, 0, 255])
+            .chain(self.palette.iter().copied())
+            .collect();
+        Paint {
+            palette,
+            hidden: None,
+            flat: true,
+        }
     }
 
     /// Tras guardar: la cabecera y el orden de las caras pasan a ser los del texto escrito (la paleta viva no cambia).
@@ -728,6 +800,51 @@ pub(crate) mod tests {
             "un vóxel en el suelo: cinco caras, sin la de abajo"
         );
         assert_eq!(palette_of(&out), ["808080"]);
+    }
+
+    #[test]
+    fn avisos() {
+        use crate::bridge::proto::Severity;
+        let (_, s) = load(&lf(CHEST)).unwrap();
+        assert!(
+            checks(&s, Some(s.grid.size), false).is_empty(),
+            "un modelo del juego sin cambios no avisa de nada"
+        );
+        let codes = |s: &Structure, opened, new| -> Vec<String> {
+            let c = checks(s, opened, new);
+            assert!(
+                c.iter()
+                    .all(|c| c.severity != Severity::Error && !c.message.is_empty())
+            );
+            c.into_iter().map(|c| c.code).collect()
+        };
+        assert_eq!(codes(&s, Some([16, 20, 16]), false), ["model-size"]);
+        assert_eq!(codes(&s, None, true), ["model-new"]);
+        let (_, empty) = Model::new([4, 4, 4]);
+        assert_eq!(codes(&empty, None, true), ["model-empty", "model-new"]);
+    }
+
+    #[test]
+    fn guias_de_copa() {
+        let dir = std::env::temp_dir().join(format!("modelos-copa-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let trunk = dir.join("palm_v1_trunk_model.json");
+        assert!(
+            canopy_guides(&trunk).is_empty(),
+            "sin fichero de copa no hay guías"
+        );
+        std::fs::write(
+            dir.join("palm_v1_canopy.json"),
+            r#"{"center": [8, 30.5, 8], "clumps": [{"x": 4, "y": 28, "z": 9.4, "i": 2}]}"#,
+        )
+        .unwrap();
+        assert_eq!(canopy_guides(&trunk), [[8, 31, 8], [4, 28, 9]]);
+        assert!(
+            canopy_guides(&dir.join("palm_model.json")).is_empty(),
+            "solo los troncos tienen copa"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

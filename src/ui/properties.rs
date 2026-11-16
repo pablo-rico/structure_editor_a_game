@@ -25,6 +25,63 @@ pub const LOCK_SIZE: &str = "Este diseño tiene ese tamaño en el juego. Para ot
 pub const LOCK_DOOR: &str = "El juego pone la calle delante de esta celda. Puedes cambiar la hoja, no su sitio.";
 pub const LOCK_STYLE: &str = "Es el estilo del diseño del juego que sustituyes.";
 
+/// Propiedades de un modelo de vóxeles: nombre (el de su fichero), de dónde sale, tamaño y punto de apoyo.
+pub fn ui_model(ui: &mut Ui, doc: &mut Doc, resize: &mut Resize) {
+    let Some(model) = doc.model.clone() else { return };
+    section(ui, "Modelo");
+    ui.label(RichText::new(&doc.meta.name).color(theme::TITLE)).on_hover_text("El nombre es el de su fichero: el juego lo busca por él");
+    if !model.note().is_empty() {
+        ui.label(dim(model.note()));
+    }
+    if model.edited() {
+        ui.label(dim("Retocado a mano: los scripts de arte ya no lo regeneran."));
+    }
+
+    section(ui, "Tamaño (vóxeles)");
+    let size = doc.s.grid.size;
+    let want = resize.0.get_or_insert(size);
+    ui.horizontal(|ui| {
+        for (k, name) in [(0, "Ancho"), (2, "Fondo"), (1, "Alto")] {
+            ui.label(name);
+            ui.add(egui::DragValue::new(&mut want[k]).range(1..=crate::vmodel::MAX_SIDE));
+        }
+    });
+    let want = *want;
+    ui.label(dim(format!("Una casilla del juego son {} vóxeles. Crece o encoge por la derecha, por detrás y por arriba.", model.cell)));
+    if want != size {
+        ui.horizontal(|ui| {
+            if ui.button("Aplicar").clicked() && !doc.resize_model(want) {
+                resize.0 = Some(size);
+            }
+            if ui.button("Cancelar").clicked() {
+                resize.0 = Some(size);
+            }
+        });
+        ui.label(dim("No se puede encoger por debajo de lo que ya hay dibujado."));
+    }
+
+    section(ui, "Punto de apoyo");
+    match model.origin {
+        Some(mut o) => {
+            ui.horizontal(|ui| {
+                for (k, axis) in [(0, "x"), (1, "y"), (2, "z")] {
+                    ui.add(egui::DragValue::new(&mut o[k]).prefix(format!("{axis} ")));
+                }
+            });
+            ui.label(dim("El punto del modelo que cae en la esquina de su casilla en el juego."));
+            if Some(o) != model.origin {
+                doc.edit_model("Punto de apoyo", |m| m.origin = Some(o));
+            }
+        }
+        None => {
+            ui.label(dim("Este modelo se apoya en su esquina."));
+            if ui.button("Mover el punto de apoyo").clicked() {
+                doc.edit_model("Punto de apoyo", |m| m.origin = Some([0, 0, 0]));
+            }
+        }
+    }
+}
+
 pub fn ui(ui: &mut Ui, cat: &Catalog, doc: &mut Doc, selection: Option<([i32; 3], [i32; 3])>, resize: &mut Resize) {
     // Sustituir un diseño del juego fija estilo, tamaño y puerta (los niveles quedan libres).
     let locked = doc.meta.replaces.is_some();

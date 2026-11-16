@@ -27,6 +27,9 @@ pub enum Section {
     Models,
 }
 
+/// Un modelo cargado (qué pintar, con qué paleta y si ya se retocó en el editor) o por qué no se puede abrir.
+pub type ModelLoad = Result<(Arc<Structure>, Paint, bool), String>;
+
 /// Un `_model.json` del juego. Se carga la primera vez que hace falta su miniatura.
 pub struct ModelEntry {
     pub path: PathBuf,
@@ -35,7 +38,7 @@ pub struct ModelEntry {
     pub group: ModelGroup,
     pub modified: SystemTime,
     /// Lo cargado (con qué se pinta y si ya se retocó en el editor), o por qué no se puede abrir.
-    pub loaded: Option<Result<(Arc<Structure>, Paint, bool), String>>,
+    pub loaded: Option<ModelLoad>,
 }
 
 /// Los modelos que hay bajo `root` (la carpeta de arte del juego), por grupo y nombre. `old` es la lista anterior:
@@ -64,7 +67,7 @@ pub fn scan_models(root: &Path, old: Vec<ModelEntry>) -> Vec<ModelEntry> {
             ModelEntry { name: file.trim_end_matches("_model.json").to_string(), group: ModelGroup::of(&rel), path, modified, loaded }
         })
         .collect();
-    out.sort_by(|a, b| (a.group, a.name.to_lowercase()).cmp(&(b.group, b.name.to_lowercase())));
+    out.sort_by_cached_key(|e| (e.group, e.name.to_lowercase()));
     out
 }
 
@@ -93,6 +96,8 @@ pub enum Action {
     Piece(String),
     Stamp(PathBuf),
     OpenModel(PathBuf),
+    NewModel,
+    ImportVoxModel,
 }
 
 pub struct Library {
@@ -272,9 +277,17 @@ impl Library {
     /// Los modelos de vóxeles del juego, por grupos. Cada uno se carga cuando su tarjeta entra en pantalla.
     fn models_section(&mut self, ui: &mut Ui, current: Option<&Path>, thumb: &mut Thumb) -> Option<Action> {
         let mut act = None;
+        ui.horizontal(|ui| {
+            if ui.button(format!("{} Nuevo modelo", icon::FILE_PLUS)).on_hover_text("Un modelo vacío; al guardarlo eliges su nombre y su carpeta").clicked() {
+                act = Some(Action::NewModel);
+            }
+            if ui.button(format!("{} Importar de MagicaVoxel…", icon::DOWNLOAD_SIMPLE)).clicked() {
+                act = Some(Action::ImportVoxModel);
+            }
+        });
         if self.models.is_empty() {
             ui.label(dim("No encuentro modelos en la carpeta del juego."));
-            return None;
+            return act;
         }
         let search = self.search.to_lowercase();
         let mut any = false;
@@ -313,6 +326,10 @@ impl Library {
                         act = Some(Action::OpenModel(e.path.clone()));
                     }
                     r.context_menu(|ui| {
+                        if ui.button(format!("{} Exportar a MagicaVoxel…", icon::EXPORT)).clicked() {
+                            act = Some(Action::ExportVox(e.path.clone()));
+                            ui.close();
+                        }
                         if ui.button(format!("{} {}", icon::FOLDER_OPEN, crate::platform::REVEAL_LABEL)).clicked() {
                             crate::platform::reveal(&e.path);
                             ui.close();

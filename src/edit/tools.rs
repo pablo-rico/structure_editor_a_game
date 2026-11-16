@@ -5,7 +5,7 @@
 use super::Doc;
 use super::ops::{self, BoxShape, Clip, V};
 use crate::bridge::proto::Interactable;
-use crate::model::Structure;
+use crate::model::{Structure, face_unkey};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -62,6 +62,11 @@ impl Tool {
     /// Las básicas, en el orden de la tira (§10).
     pub const BASIC: [Tool; 8] =
         [Tool::Pencil, Tool::Box, Tool::Line, Tool::Fill, Tool::Extrude, Tool::Eyedropper, Tool::Select, Tool::Move];
+
+    /// Vale para un modelo de vóxeles: solo las básicas (construir y colocar son de edificios).
+    pub fn for_models(self) -> bool {
+        Self::BASIC.contains(&self)
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -229,6 +234,8 @@ pub struct Tools {
     pub box_shape: BoxShape,
     /// Relleno hasta esta planta (alturas incluidas); `None` = toda la estructura.
     pub fill_range: Option<(i32, i32)>,
+    /// Modelos, modo Pintar: el lápiz pinta solo la cara señalada (sombreado dibujado), no el vóxel entero.
+    pub face_only: bool,
     pub selection: Option<(V, V)>,
     pub clipboard: Option<Clip>,
     pub hand: Option<Hand>,
@@ -250,6 +257,7 @@ impl Default for Tools {
             detail: false,
             box_shape: BoxShape::Solid,
             fill_range: None,
+            face_only: false,
             selection: None,
             clipboard: None,
             hand: None,
@@ -371,7 +379,11 @@ impl Tools {
                 if p.pressed
                     && let Some((v, _)) = p.hit
                 {
-                    let m = doc.s.grid.get(v[0], v[1], v[2]);
+                    // En un modelo, el color de la cara señalada (puede ser sombreado dibujado).
+                    let m = match crate::vmodel::dir_of(p.hit.map_or([0; 3], |h| h.1)) {
+                        Some(d) if doc.is_model() => doc.face_color(v, d),
+                        _ => doc.s.grid.get(v[0], v[1], v[2]),
+                    };
                     self.material = m;
                     return Some(m);
                 }
@@ -380,7 +392,14 @@ impl Tools {
                 if p.pressed {
                     doc.begin_stroke(self.mode.label());
                 }
-                if p.down
+                if self.face_only && self.mode == Mode::Paint && doc.is_model() {
+                    if p.down
+                        && let Some((v, n)) = p.hit
+                        && let Some(d) = crate::vmodel::dir_of(n)
+                    {
+                        doc.paint_face(v, d, self.material);
+                    }
+                } else if p.down
                     && let Some(v) = self.target(p)
                 {
                     let cells = self.with_mirror(doc, ops::brush(v, self.brush));
@@ -496,12 +515,17 @@ impl Tools {
         for (v, m, detail) in clip.solids() {
             doc.paint(at[0] + v[0], at[1] + v[1], at[2] + v[2], m, detail);
         }
+        // El sombreado dibujado viaja con sus vóxeles.
+        for (&key, &color) in &clip.faces {
+            let (v, d) = face_unkey(key);
+            doc.paint_face([at[0] + v[0], at[1] + v[1], at[2] + v[2]], d, color);
+        }
     }
 
     /// Mueve el contenido de la selección `delta` sub-cubos (flechas; un paso de deshacer cada vez).
     pub fn nudge(&mut self, doc: &mut Doc, delta: V) -> bool {
         let Some((a, b)) = self.selection else { return false };
-        let clip = Clip::copy(&doc.s.grid, a, b);
+        let clip = Clip::copy_from(&doc.s, a, b);
         doc.begin_stroke("Mover selección");
         for v in ops::cuboid(a, b) {
             doc.paint(v[0], v[1], v[2], 0, false);
@@ -526,7 +550,7 @@ impl Tools {
 
     pub fn copy(&mut self, doc: &Doc) -> bool {
         let Some((a, b)) = self.selection else { return false };
-        self.clipboard = Some(Clip::copy(&doc.s.grid, a, b));
+        self.clipboard = Some(Clip::copy_from(&doc.s, a, b));
         true
     }
 
@@ -550,7 +574,7 @@ impl Tools {
     /// Transforma la selección en su sitio (espejo o giro), anclada en su esquina mínima.
     pub fn transform(&mut self, doc: &mut Doc, label: &str, f: impl Fn(&Clip) -> Clip) -> bool {
         let Some((a, b)) = self.selection else { return false };
-        let clip = f(&Clip::copy(&doc.s.grid, a, b));
+        let clip = f(&Clip::copy_from(&doc.s, a, b));
         doc.begin_stroke(label);
         for v in ops::cuboid(a, b) {
             doc.paint(v[0], v[1], v[2], 0, false);
@@ -585,7 +609,7 @@ impl Tools {
 mod tests {
     use super::*;
     use crate::agvox::Meta;
-    use crate::model::VoxelGrid;
+    use crate::model::{VoxelGrid, face_key};
 
     fn doc() -> Doc {
         Doc::new(Meta::default(), Structure { grid: VoxelGrid::new([16, 16, 16]), ..Default::default() }, None)
@@ -593,6 +617,85 @@ mod tests {
 
     fn click(place: V) -> Pointer {
         Pointer { place: Some(place), hit: Some((place, [0, 1, 0])), pressed: true, down: true, released: true, alt: false }
+    }
+
+    fn chest() -> Doc {
+        let (m, s) = crate::vmodel::load(&crate::vmodel::tests::lf(crate::vmodel::tests::CHEST)).unwrap();
+        Doc::new_model(m, s, None)
+    }
+
+    /// Un vóxel del cofre con color propio en su cara de arriba, y ese color.
+    fn shaded_top(d: &Doc) -> (V, u8) {
+        let (&k, &c) = d.s.face_colors.iter().filter(|(k, _)| face_unkey(**k).1 == 2).min().unwrap();
+        (face_unkey(k).0, c)
+    }
+
+    #[test]
+    fn solo_la_cara() {
+        let mut d = chest();
+        let (v, own) = shaded_top(&d);
+        let base = d.s.grid.get(v[0], v[1], v[2]);
+        let other = (1..=10).find(|&c| c != base && c != own).unwrap();
+        let mut t = Tools { mode: Mode::Paint, material: other, face_only: true, ..Default::default() };
+        t.step(&mut d, &Pointer { hit: Some((v, [0, 1, 0])), place: Some(v), pressed: true, down: true, released: true, alt: false });
+        assert_eq!(d.face_color(v, 2), other);
+        assert_eq!(d.s.grid.get(v[0], v[1], v[2]), base, "el vóxel sigue con su color");
+        assert_eq!(d.history().count(), 1);
+        // En una estructura el conmutador no hace nada: pinta el sub-cubo entero.
+        let mut s = doc();
+        s.paint(1, 0, 1, 3, false);
+        s.end_stroke();
+        t.material = 5;
+        t.step(&mut s, &click([1, 0, 1]));
+        assert_eq!(s.s.grid.get(1, 0, 1), 5);
+        assert!(s.s.face_colors.is_empty());
+    }
+
+    #[test]
+    fn cuentagotas_coge_la_cara() {
+        let mut d = chest();
+        let (v, own) = shaded_top(&d);
+        let mut t = Tools { tool: Tool::Eyedropper, ..Default::default() };
+        let got = t.step(&mut d, &Pointer { hit: Some((v, [0, 1, 0])), pressed: true, ..Default::default() });
+        assert_eq!(got, Some(own));
+        let side = t.step(&mut d, &Pointer { hit: Some((v, [0, -1, 0])), pressed: true, ..Default::default() });
+        assert_eq!(side, Some(d.face_color(v, 3)));
+    }
+
+    #[test]
+    fn mover_seleccion_conserva_sombreado() {
+        let mut d = chest();
+        let before = (d.s.grid.clone(), d.s.face_colors.clone());
+        let size = d.s.grid.size;
+        assert!(d.resize_model([size[0] + 2, size[1], size[2]]));
+        let mut t = Tools { selection: Some(([0, 0, 0], [size[0] - 1, size[1] - 1, size[2] - 1])), ..Default::default() };
+        assert!(t.nudge(&mut d, [1, 0, 0]));
+        let (v, own) = shaded_top(&d);
+        assert_eq!(before.1.get(&face_key([v[0] - 1, v[1], v[2]], 2)), Some(&own), "el sombreado viaja con su vóxel");
+        assert_eq!(d.s.face_colors.len(), before.1.len());
+        assert!(t.nudge(&mut d, [-1, 0, 0]));
+        assert_eq!(d.s.face_colors, before.1);
+        assert_eq!(d.undo().as_deref(), Some("Mover selección"));
+        assert_eq!(d.undo().as_deref(), Some("Mover selección"));
+        assert!(d.resize_model(size));
+        assert_eq!((d.s.grid.clone(), d.s.face_colors.clone()), before);
+    }
+
+    #[test]
+    fn pegar_y_vaciar_con_caras() {
+        let mut d = chest();
+        let (v, own) = shaded_top(&d);
+        let size = d.s.grid.size;
+        assert!(d.resize_model([size[0], size[1] + 4, size[2]]));
+        let mut t = Tools { selection: Some((v, v)), ..Default::default() };
+        assert!(t.copy(&d));
+        let at = [v[0], size[1] + 2, v[2]];
+        assert!(t.paste(&mut d, at));
+        assert_eq!(d.face_color(at, 2), own);
+        assert_eq!(d.s.grid.get(at[0], at[1], at[2]), d.s.grid.get(v[0], v[1], v[2]));
+        // Vaciar se lleva también las caras propias de lo borrado.
+        assert!(t.clear_selection(&mut d));
+        assert!(!d.s.face_colors.keys().any(|&k| face_unkey(k).0 == at));
     }
 
     #[test]

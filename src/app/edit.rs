@@ -34,6 +34,9 @@ pub(super) enum Confirm {
     Delete(PathBuf),
     /// El modelo abierto ha cambiado en disco desde que se abrió: guardar lo pisaría.
     Overwrite,
+    /// Modelo nuevo: vacío, o importado de un `.vox`.
+    NewModel,
+    ImportModel,
 }
 
 /// Con qué se pinta lo que se edita: la paleta del modelo o la del catálogo (con el tema de la Paleta).
@@ -61,6 +64,8 @@ struct Gesture {
 /// Estado de Editar de la fase 3 (construcción, piezas, biblioteca, Aspecto).
 #[derive(Default)]
 pub(super) struct EditUi {
+    /// Modelos: dónde van el centro y los racimos de la copa de un árbol mixto (guías, no se editan).
+    pub guides: Vec<[i32; 3]>,
     pub tools_cat: Vec<ToolInfo>,
     params: HashMap<String, BTreeMap<String, i64>>,
     pub furniture: Option<FurnitureCatalog>,
@@ -266,14 +271,12 @@ impl State {
         match opened {
             Ok(()) => {
                 if model {
-                    // Las herramientas de edificio no valen para un modelo.
-                    self.editor.tools.cancel();
-                    self.editor.tools.tool = Tool::Pencil;
-                    self.editor.palette.selected = 1;
+                    self.model_opened();
                 } else {
+                    self.ed.guides.clear();
                     self.remember_recent(path);
+                    self.after_open();
                 }
-                self.after_open();
             }
             Err(e) => self.toasts.push(ToastKind::Error, format!("No se ha podido abrir: {e:#}"), None),
         }
@@ -444,8 +447,64 @@ impl State {
                 let materials = self.materials();
                 self.ed.library.refresh(&self.host.paths.agame_root, &materials, true);
             }
+            Some(Confirm::NewModel) => self.start_model(None),
+            Some(Confirm::ImportModel) => self.import_vox_model(),
             Some(Confirm::Overwrite) | None => {}
         }
+    }
+
+    /// Deja Editar listo para un modelo recién abierto: herramientas básicas, sin capas de edificio y con sus guías.
+    fn model_opened(&mut self) {
+        self.editor.tools.cancel();
+        self.editor.tools.tool = Tool::Pencil;
+        self.editor.tools.detail = false;
+        self.editor.tools.fill_range = None;
+        self.editor.palette.selected = 1;
+        // Solo la rejilla: las demás capas son de edificios (puerta, navegación, partes…).
+        self.edit_view.layers = crate::render::Layers { grid: true, ..crate::render::Layers::none() };
+        let path = self.editor.doc.as_ref().and_then(|d| d.path.clone());
+        self.ed.guides = path.map(|p| crate::vmodel::canopy_guides(&p)).unwrap_or_default();
+        self.after_open();
+    }
+
+    /// Modelo nuevo: vacío (`None`) o con lo importado.
+    fn start_model(&mut self, imported: Option<(crate::vmodel::Model, Structure)>) {
+        match imported {
+            Some((m, s)) => self.editor.adopt_model(m, s),
+            None => self.editor.new_model([16, 16, 16]),
+        }
+        self.model_opened();
+    }
+
+    /// «Importar de MagicaVoxel…» en Modelos: los colores del `.vox` pasan tal cual, sin elegir materiales.
+    fn import_vox_model(&mut self) {
+        let Some(path) = rfd::FileDialog::new().add_filter("MagicaVoxel", &["vox"]).pick_file() else { return };
+        let read = std::fs::read(&path).map_err(anyhow::Error::from).and_then(|b| crate::vox::read(&b));
+        match read.and_then(|f| crate::vox::to_model(&f)) {
+            Ok(model) => {
+                self.start_model(Some(model));
+                if let Some(doc) = self.editor.doc.as_mut() {
+                    doc.meta.name = path.file_stem().map_or_else(|| "modelo".into(), |n| n.to_string_lossy().into_owned());
+                }
+            }
+            Err(e) => self.toasts.push(ToastKind::Error, format!("{e:#}"), None),
+        }
+    }
+
+    /// Pide confirmación si hay cambios sin guardar antes de empezar un modelo nuevo.
+    fn ask_model(&mut self, import: bool) {
+        if self.editor.doc.as_ref().is_some_and(|d| d.unsaved) {
+            self.confirm = Some(if import { Confirm::ImportModel } else { Confirm::NewModel });
+        } else if import {
+            self.import_vox_model();
+        } else {
+            self.start_model(None);
+        }
+    }
+
+    /// Lo abierto es un modelo de vóxeles del juego y no una estructura.
+    pub(super) fn is_model(&self) -> bool {
+        self.editor.doc.as_ref().is_some_and(|d| d.is_model())
     }
 
     pub(super) fn edit_title(&mut self, ui: &mut Ui) {
@@ -467,6 +526,14 @@ impl State {
 
     pub(super) fn edit_actions(&mut self, ui: &mut Ui) {
         if self.editor.doc.is_none() {
+            return;
+        }
+        if self.is_model() {
+            // El fichero del juego es la fuente: no hay «exportar».
+            let tip = "Guarda el modelo en su fichero del juego (Cmd+S). Unity lo recarga solo.";
+            if widgets::primary(ui, &format!("{}  GUARDAR EN EL JUEGO", icon::FLOPPY_DISK)).on_hover_text(tip).clicked() {
+                self.save(false);
+            }
             return;
         }
         let errors = self.editor.errors();
@@ -629,7 +696,7 @@ impl State {
             let (id, facing) = rest.rsplit_once(':').map_or((rest, 3), |(i, f)| (i, f.parse().unwrap_or(3)));
             let name = self.ed.furniture.as_ref().and_then(|f| f.pieces.iter().find(|p| p.id == id)).map_or(id.to_string(), |p| p.label.clone());
             let len = st.grid.data.len();
-            let clip = Clip { size: st.grid.size, data: st.grid.data, detail: st.grid.detail.unwrap_or_else(|| vec![0; len]) };
+            let clip = Clip { size: st.grid.size, data: st.grid.data, detail: st.grid.detail.unwrap_or_else(|| vec![0; len]), faces: Default::default() };
             self.editor.tools.hand =
                 Some(Hand { name, clip, interactables: st.interactables, anchor: st.anchor, furniture: Some(id.to_string()), facing });
             self.editor.tools.tool = Tool::Place;
@@ -694,6 +761,8 @@ impl State {
             Action::Piece(id) => self.take_piece(&id, 3),
             Action::Stamp(p) => self.take_stamp(&p),
             Action::OpenModel(p) => self.ask_open_path(p),
+            Action::NewModel => self.ask_model(false),
+            Action::ImportVoxModel => self.ask_model(true),
         }
     }
 
@@ -738,6 +807,33 @@ impl State {
     }
 
     pub(super) fn export_vox(&mut self, from: Option<PathBuf>) {
+        // Un modelo del juego (el abierto o uno de la Biblioteca) sale con su propia paleta.
+        let model = match &from {
+            Some(p) if is_model_path(p) => match std::fs::read_to_string(p).map_err(anyhow::Error::from).and_then(|t| crate::vmodel::load(&t)) {
+                Ok((m, s)) => {
+                    let file = p.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                    Some((file.trim_end_matches("_model.json").to_string(), m, s))
+                }
+                Err(e) => return self.toasts.push(ToastKind::Error, format!("{e:#}"), None),
+            },
+            Some(_) => None,
+            None => self.editor.doc.as_ref().and_then(|d| Some((d.meta.name.clone(), d.model.clone()?, d.s.clone()))),
+        };
+        if let Some((name, m, s)) = model {
+            let bytes = match crate::vox::write_model(&m, &s) {
+                Ok(b) => b,
+                Err(e) => return self.toasts.push(ToastKind::Error, format!("{e:#}"), None),
+            };
+            let file = format!("{}.vox", crate::editor::slug(&name));
+            if let Some(out) = rfd::FileDialog::new().add_filter("MagicaVoxel", &["vox"]).set_file_name(file).save_file() {
+                let shading = if s.face_colors.is_empty() { "" } else { " El sombreado dibujado cara a cara no viaja al .vox." };
+                match std::fs::write(&out, bytes) {
+                    Ok(()) => self.toasts.push(ToastKind::Ok, format!("Exportado a MagicaVoxel.{shading}"), Some(out)),
+                    Err(e) => self.toasts.push(ToastKind::Error, format!("No se ha podido escribir: {e}"), None),
+                }
+            }
+            return;
+        }
         let Some(cat) = self.catalog.clone() else { return };
         let materials = self.materials();
         let (name, s) = match from {
@@ -885,7 +981,7 @@ impl State {
         }
         let keyed: Vec<String> =
             self.ed.tools_cat.iter().filter(|t| plain && build_key(&t.id).and_then(Key::from_name).is_some_and(pressed)).map(|t| t.id.clone()).collect();
-        if let Some(id) = keyed.into_iter().next() {
+        if let Some(id) = keyed.into_iter().next().filter(|_| !self.is_model()) {
             self.editor.tools.tool = Tool::Build;
             self.editor.tools.build = id;
             self.cancel_build();
@@ -918,7 +1014,7 @@ impl State {
                 self.editor.tools.selection = None;
             }
         }
-        if m.command && pressed(Key::E) {
+        if m.command && pressed(Key::E) && !self.is_model() {
             self.export();
         }
         let (yaw, place_hint) = (self.edit_view.yaw_deg, self.edit_place);
@@ -1192,6 +1288,9 @@ fn tool_strip(ui: &mut Ui, st: &mut State) {
             }
         }
     });
+    if st.is_model() {
+        return; // construir y colocar son de edificios
+    }
     if !st.ed.tools_cat.is_empty() {
         title(ui, "CONSTRUIR");
         let cat = st.ed.tools_cat.clone();
@@ -1227,20 +1326,24 @@ fn tool_strip(ui: &mut Ui, st: &mut State) {
 
 /// Barra contextual (§10): planta de trabajo y los parámetros de la herramienta activa.
 fn context_bar(ui: &mut Ui, st: &mut State, cat: &Catalog) {
+    let model = st.is_model();
+    let cell = st.editor.doc.as_ref().map_or(SUB, |d| d.s.cell_size());
     ui.horizontal_wrapped(|ui| {
-        ui.label("Planta").on_hover_text("Planta de trabajo: corta la vista aquí y construyes sobre su suelo (Shift+↑/↓).");
-        let floors = st.editor.doc.as_ref().map_or(0, |d| d.s.band_floors.len());
-        let mut f = st.ed.floor;
-        let opts: Vec<(Option<usize>, String)> = std::iter::once((None, "Todo".to_string()))
-            .chain((0..floors).map(|i| (Some(i), if i == 0 { "Baja".to_string() } else { i.to_string() })))
-            .collect();
-        if widgets::segmented(ui, &mut f, &opts) {
-            st.set_floor(f);
+        if !model {
+            ui.label("Planta").on_hover_text("Planta de trabajo: corta la vista aquí y construyes sobre su suelo (Shift+↑/↓).");
+            let floors = st.editor.doc.as_ref().map_or(0, |d| d.s.band_floors.len());
+            let mut f = st.ed.floor;
+            let opts: Vec<(Option<usize>, String)> = std::iter::once((None, "Todo".to_string()))
+                .chain((0..floors).map(|i| (Some(i), if i == 0 { "Baja".to_string() } else { i.to_string() })))
+                .collect();
+            if widgets::segmented(ui, &mut f, &opts) {
+                st.set_floor(f);
+            }
+            if ui.button(icon::PLUS).on_hover_text("Añadir una planta encima").clicked() {
+                st.add_floor();
+            }
+            ui.separator();
         }
-        if ui.button(icon::PLUS).on_hover_text("Añadir una planta encima").clicked() {
-            st.add_floor();
-        }
-        ui.separator();
         match st.editor.tools.tool {
             Tool::Build => {
                 let doc = st.editor.doc.as_ref();
@@ -1296,7 +1399,7 @@ fn context_bar(ui: &mut Ui, st: &mut State, cat: &Catalog) {
                 }
                 if t == Tool::Pencil {
                     ui.label("Pincel").on_hover_text("Tamaño en sub-cubos; Celda = una celda entera (Coma/Punto)");
-                    widgets::segmented(ui, &mut tools.brush, &[(1, "1".into()), (2, "2".into()), (4, "4".into()), (8, "Celda".into())]);
+                    widgets::segmented(ui, &mut tools.brush, &[(1, "1".into()), (2, "2".into()), (4, "4".into()), (cell, "Celda".into())]);
                 }
                 if t == Tool::Box {
                     widgets::segmented(
@@ -1305,7 +1408,7 @@ fn context_bar(ui: &mut Ui, st: &mut State, cat: &Catalog) {
                         &[(BoxShape::Solid, "Llena".into()), (BoxShape::Hollow, "Hueca".into()), (BoxShape::Walls, "Solo paredes".into())],
                     );
                 }
-                if t == Tool::Fill {
+                if t == Tool::Fill && !model {
                     ui.label("Hasta");
                     let mut this = tools.fill_range.is_some();
                     if widgets::segmented(ui, &mut this, &[(true, "Esta planta".into()), (false, "Toda".into())]) {
@@ -1323,10 +1426,15 @@ fn context_bar(ui: &mut Ui, st: &mut State, cat: &Catalog) {
                     st.plane.1 = on;
                 }
                 if on {
-                    ui.label(RichText::new(format!("altura {y} · nivel {}", y.div_euclid(SUB))).font(theme::mono(12.0)));
+                    ui.label(RichText::new(format!("altura {y} · nivel {}", y.div_euclid(cell))).font(theme::mono(12.0)));
                 }
-                widgets::toggle(ui, &mut st.editor.tools.detail, &format!("{} Detalle", icon::ARMCHAIR))
-                    .on_hover_text("Muebles y escaleras: el corte por planta no los quita");
+                if !model {
+                    widgets::toggle(ui, &mut st.editor.tools.detail, &format!("{} Detalle", icon::ARMCHAIR))
+                        .on_hover_text("Muebles y escaleras: el corte por planta no los quita");
+                } else if t == Tool::Pencil && st.editor.tools.mode == Mode::Paint {
+                    widgets::toggle(ui, &mut st.editor.tools.face_only, &format!("{} Solo la cara", icon::SQUARE_HALF))
+                        .on_hover_text("Pinta solo la cara que señalas, no el vóxel entero: para dibujar luces y sombras");
+                }
             }
         }
     });
@@ -1402,6 +1510,15 @@ fn viewport(ui: &mut Ui, st: &mut State, cat: &Catalog) {
             min: [a[0].min(b[0]) * SUB, y, a[1].min(b[1]) * SUB],
             max: [a[0].max(b[0]) * SUB + SUB - 1, y, a[1].max(b[1]) * SUB + SUB - 1],
         });
+    }
+    // Modelos: guías de la copa (cubos fantasma) y el punto de apoyo (en rojo).
+    if let Some(doc) = st.editor.doc.as_ref().filter(|d| d.is_model()) {
+        if !st.ed.guides.is_empty() {
+            gizmos.push(Gizmo::Ghost { cells: st.ed.guides.clone(), material: st.editor.tools.material, erase: false });
+        }
+        if let Some(o) = doc.model.as_ref().and_then(|m| m.origin) {
+            gizmos.push(Gizmo::Ghost { cells: vec![o], material: st.editor.tools.material, erase: true });
+        }
     }
     st.edit_view.gizmos = gizmos;
     let Some(vp) = st.viewports.as_mut() else { return };
@@ -1492,6 +1609,9 @@ fn viewport(ui: &mut Ui, st: &mut State, cat: &Catalog) {
 
 pub(super) fn palette(ui: &mut Ui, st: &mut State) {
     let Some(cat) = st.catalog.clone() else { return loading(ui, &st.host.status) };
+    if let Some(doc) = st.editor.doc.as_mut().filter(|d| d.is_model()) {
+        return st.editor.palette.ui_model(ui, doc);
+    }
     if st.editor.palette.selected == 0 {
         st.editor.palette.pick(cat.materials.iter().position(|m| m == "Stone").unwrap_or(1) as u8);
     }
@@ -1577,11 +1697,18 @@ pub(super) fn properties(ui: &mut Ui, st: &mut State) {
         ui.label(dim("Abre o crea una estructura."));
         return;
     }
-    replaces_section(ui, st, &cat);
-    look_section(ui, st, &cat);
+    let model = st.is_model();
+    if !model {
+        replaces_section(ui, st, &cat);
+        look_section(ui, st, &cat);
+    }
     let ed = &mut st.editor;
     let Some(doc) = ed.doc.as_mut() else { return };
-    properties::ui(ui, &cat, doc, ed.tools.selection, &mut ed.resize);
+    if model {
+        properties::ui_model(ui, doc, &mut ed.resize);
+    } else {
+        properties::ui(ui, &cat, doc, ed.tools.selection, &mut ed.resize);
+    }
     let Some((a, b)) = ed.tools.selection else { return };
     ui.separator();
     widgets::section(ui, "Selección");
@@ -1609,7 +1736,7 @@ pub(super) fn properties(ui: &mut Ui, st: &mut State) {
         if ui.button("Vaciar").on_hover_text("Supr").clicked() {
             ed.tools.clear_selection(doc);
         }
-        if ui.button("Marcar como detalle").clicked() {
+        if !model && ui.button("Marcar como detalle").clicked() {
             doc.begin_stroke("Marcar detalle");
             for v in ops::cuboid(a, b) {
                 let m = doc.s.grid.get(v[0], v[1], v[2]);
@@ -1619,7 +1746,7 @@ pub(super) fn properties(ui: &mut Ui, st: &mut State) {
             }
             doc.end_stroke();
         }
-        stamp = ui.button(format!("{} Guardar como sello…", icon::STAMP)).clicked();
+        stamp = !model && ui.button(format!("{} Guardar como sello…", icon::STAMP)).clicked();
     });
     if stamp {
         st.ed.stamp_name = Some("Sello".into());
@@ -1739,6 +1866,15 @@ fn look_section(ui: &mut Ui, st: &mut State, cat: &Catalog) {
 
 pub(super) fn validation(ui: &mut Ui, st: &mut State) {
     let Some(doc) = &st.editor.doc else { return };
+    if doc.is_model() {
+        // Sin reglas de juego: solo los avisos propios del modelo.
+        if doc.s.checks.is_empty() {
+            ui.label(RichText::new("Nada que avisar. Al guardar, el modelo va directo al juego.").color(theme::GREEN));
+        } else if let Some(at) = inspector::checks(ui, &doc.s) {
+            st.locate(&at);
+        }
+        return;
+    }
     if doc.s.nav.levels == 0 && st.host.status != crate::host::Status::Ready {
         ui.label(dim("La validación llega cuando el generador esté listo."));
         return;

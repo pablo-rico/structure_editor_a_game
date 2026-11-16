@@ -186,6 +186,30 @@ pub fn to_structure(file: &VoxFile, map: &BTreeMap<u8, Option<u8>>, foundation: 
     }
 }
 
+/// Modelo del juego nuevo con lo importado: los colores del `.vox` pasan tal cual a su paleta.
+pub fn to_model(file: &VoxFile) -> Result<(crate::vmodel::Model, Structure)> {
+    let max = crate::vmodel::MAX_COLORS;
+    if file.colors.len() > max {
+        bail!("El .vox usa {} colores y un modelo del juego admite {max} como mucho.", file.colors.len());
+    }
+    let (mut model, mut s) = crate::vmodel::Model::new(file.size);
+    model.palette = file.colors.iter().map(|c| c.rgb).collect();
+    for (p, i) in &file.cells {
+        if let Some(at) = file.colors.iter().position(|c| c.index == *i) {
+            s.grid.set(p[0], p[1], p[2], at as u8 + 1);
+        }
+    }
+    if model.palette.is_empty() {
+        model.palette.push([128, 128, 128]);
+    }
+    Ok((model, s))
+}
+
+/// Escribe un modelo del juego como `.vox`, con su paleta. El sombreado por cara no cabe en un `.vox`.
+pub fn write_model(model: &crate::vmodel::Model, s: &Structure) -> Result<Vec<u8>> {
+    write(s, &model.paint().palette, None)
+}
+
 /// Escribe la estructura como `.vox` (un modelo). Falla si pasa de 256 por eje.
 pub fn write(s: &Structure, palette: &[Rgb], hidden: Option<u8>) -> Result<Vec<u8>> {
     let [sx, sy, sz] = s.grid.size;
@@ -270,6 +294,35 @@ mod tests {
         assert_eq!(s.grid.get(0, 8, 0), 2, "el modelo empieza en el nivel 1");
         assert_eq!(s.grid.get(1, 8, 1), 0, "color descartado");
         assert_eq!(s.ground_level, 1);
+    }
+
+    #[test]
+    fn modelo_vox_ida_y_vuelta() {
+        let text = crate::vmodel::tests::lf(crate::vmodel::tests::MINERAL);
+        let (m, s) = crate::vmodel::load(&text).unwrap();
+        let colors = |m: &crate::vmodel::Model, s: &Structure| {
+            let mut c: Vec<Rgb> = s.grid.data.iter().filter(|&&b| b != 0).map(|&b| m.palette[b as usize - 1]).collect();
+            c.sort();
+            c
+        };
+        let (m2, s2) = to_model(&read(&write_model(&m, &s).unwrap()).unwrap()).unwrap();
+        assert_eq!(colors(&m2, &s2), colors(&m, &s));
+        assert_eq!(s2.model_cell, Some(16));
+        assert!(m2.palette.len() <= m.palette.len());
+        // Lo importado se puede guardar como modelo del juego.
+        assert!(crate::vmodel::save(&m2, &s2).is_ok());
+    }
+
+    #[test]
+    fn modelo_vox_con_demasiados_colores() {
+        let f = VoxFile {
+            size: [16, 16, 1],
+            cells: (0..256).map(|i| ([i % 16, i / 16, 0], i as u8)).collect(),
+            colors: (0..256).map(|i| VoxColor { index: i as u8, rgb: [i as u8, 0, 0], count: 1 }).collect(),
+            models: 1,
+            rotated: false,
+        };
+        assert!(to_model(&f).unwrap_err().to_string().contains("255"));
     }
 
     #[test]

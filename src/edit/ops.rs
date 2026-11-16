@@ -3,7 +3,7 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::model::{SUB, VoxelGrid};
+use crate::model::{FaceColors, SUB, Structure, VoxelGrid, face_key, face_unkey};
 
 pub type V = [i32; 3];
 
@@ -72,7 +72,8 @@ pub fn line(a: V, b: V) -> Vec<V> {
 
 /// Pincel de lado `size` (1, 2, 4 u 8) sobre el sub-cubo `v`; con 8 ocupa la celda entera (alineado a celda).
 pub fn brush(v: V, size: i32) -> Vec<V> {
-    let base = |c: i32| if size >= SUB { c.div_euclid(SUB) * SUB } else { c - (size - 1) / 2 };
+    // Desde una celda de estructura, alineado a su propio tamaño (16 en la celda de un modelo).
+    let base = |c: i32| if size >= SUB { c.div_euclid(size) * size } else { c - (size - 1) / 2 };
     let lo = [base(v[0]), base(v[1]), base(v[2])];
     cuboid(lo, [lo[0] + size - 1, lo[1] + size - 1, lo[2] + size - 1])
 }
@@ -160,6 +161,8 @@ pub struct Clip {
     pub size: [i32; 3],
     pub data: Vec<u8>,
     pub detail: Vec<u8>,
+    /// Modelos: colores propios de cara de lo recortado, con las claves en coordenadas del recorte.
+    pub faces: FaceColors,
 }
 
 impl Clip {
@@ -171,11 +174,25 @@ impl Clip {
     pub fn copy(grid: &VoxelGrid, a: V, b: V) -> Self {
         let lo = [a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])];
         let size = [(a[0] - b[0]).abs() + 1, (a[1] - b[1]).abs() + 1, (a[2] - b[2]).abs() + 1];
-        let mut c = Self { size, data: Vec::new(), detail: Vec::new() };
+        let mut c = Self { size, data: Vec::new(), detail: Vec::new(), faces: FaceColors::new() };
         for [x, y, z] in cuboid([0; 3], [size[0] - 1, size[1] - 1, size[2] - 1]) {
             let (gx, gy, gz) = (lo[0] + x, lo[1] + y, lo[2] + z);
             c.data.push(grid.get(gx, gy, gz));
             c.detail.push(grid.is_detail(gx, gy, gz) as u8);
+        }
+        c
+    }
+
+    /// Como [`Clip::copy`], con el sombreado dibujado (colores propios de cara) de lo que cae dentro.
+    pub fn copy_from(s: &Structure, a: V, b: V) -> Self {
+        let mut c = Self::copy(&s.grid, a, b);
+        let lo = [a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])];
+        for (&key, &color) in &s.face_colors {
+            let (v, d) = face_unkey(key);
+            let r = [v[0] - lo[0], v[1] - lo[1], v[2] - lo[2]];
+            if (0..3).all(|k| (0..c.size[k]).contains(&r[k])) {
+                c.faces.insert(face_key(r, d), color);
+            }
         }
         c
     }
@@ -188,8 +205,17 @@ impl Clip {
         })
     }
 
-    fn remap(&self, size: [i32; 3], f: impl Fn(V) -> V) -> Self {
-        let mut c = Self { size, data: vec![0; self.data.len()], detail: vec![0; self.data.len()] };
+    /// `dirs[d]` = hacia dónde mira, tras la transformación, la cara que miraba a `d`.
+    fn remap(&self, size: [i32; 3], dirs: [u8; 6], f: impl Fn(V) -> V) -> Self {
+        let faces = self
+            .faces
+            .iter()
+            .map(|(&key, &color)| {
+                let (v, d) = face_unkey(key);
+                (face_key(f(v), dirs[d as usize]), color)
+            })
+            .collect();
+        let mut c = Self { size, data: vec![0; self.data.len()], detail: vec![0; self.data.len()], faces };
         for v in cuboid([0; 3], [self.size[0] - 1, self.size[1] - 1, self.size[2] - 1]) {
             let (from, to) = (self.idx(v[0], v[1], v[2]), f(v));
             let t = c.idx(to[0], to[1], to[2]);
@@ -200,23 +226,47 @@ impl Clip {
     }
 
     pub fn mirror_x(&self) -> Self {
-        self.remap(self.size, |v| [self.size[0] - 1 - v[0], v[1], v[2]])
+        self.remap(self.size, [1, 0, 2, 3, 4, 5], |v| [self.size[0] - 1 - v[0], v[1], v[2]])
     }
 
     pub fn mirror_z(&self) -> Self {
-        self.remap(self.size, |v| [v[0], v[1], self.size[2] - 1 - v[2]])
+        self.remap(self.size, [0, 1, 2, 3, 5, 4], |v| [v[0], v[1], self.size[2] - 1 - v[2]])
     }
 
     /// Un cuarto de vuelta con la regla de `VoxelGrid.RotateQuarter`: `(x, z) → (sizeZ − 1 − z, x)`.
     pub fn rotate_quarter(&self) -> Self {
         let size = [self.size[2], self.size[1], self.size[0]];
-        self.remap(size, |v| [self.size[2] - 1 - v[2], v[1], v[0]])
+        self.remap(size, [4, 5, 2, 3, 1, 0], |v| [self.size[2] - 1 - v[2], v[1], v[0]])
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recorte_lleva_caras() {
+        use crate::model::{Structure, face_key};
+        // Un marcador en la esquina de una caja de 3×1×2, con su cara +x de otro color.
+        let mut s = Structure { grid: VoxelGrid::new([8, 4, 8]), ..Default::default() };
+        s.grid.set(2, 0, 3, 1);
+        s.grid.set(4, 0, 4, 1);
+        s.face_colors.insert(face_key([2, 0, 3], 0), 7);
+        s.face_colors.insert(face_key([2, 0, 3], 4), 8);
+        s.face_colors.insert(face_key([7, 0, 7], 0), 9); // fuera del recorte
+        let c = Clip::copy_from(&s, [2, 0, 3], [4, 0, 4]);
+        assert_eq!(c.faces, FaceColors::from([(face_key([0, 0, 0], 0), 7), (face_key([0, 0, 0], 4), 8)]));
+        // Espejos: el vóxel cambia de lado y la cara mira al contrario.
+        assert_eq!(c.mirror_x().faces, FaceColors::from([(face_key([2, 0, 0], 1), 7), (face_key([2, 0, 0], 4), 8)]));
+        assert_eq!(c.mirror_z().faces, FaceColors::from([(face_key([0, 0, 1], 0), 7), (face_key([0, 0, 1], 5), 8)]));
+        // Giro: (x, z) → (sizeZ − 1 − z, x); lo que miraba a +x mira a +z, y lo que miraba a +z, a −x.
+        let r = c.rotate_quarter();
+        assert_eq!(r.size, [2, 1, 3]);
+        assert_eq!(r.faces, FaceColors::from([(face_key([1, 0, 0], 4), 7), (face_key([1, 0, 0], 1), 8)]));
+        assert_eq!(r.solids().count(), 2);
+        assert_eq!(c.rotate_quarter().rotate_quarter().rotate_quarter().rotate_quarter(), c);
+        assert_eq!(c.mirror_x().mirror_x(), c);
+    }
 
     #[test]
     fn formas() {

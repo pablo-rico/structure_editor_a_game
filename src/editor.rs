@@ -38,6 +38,9 @@ pub struct Editor {
     pub exporting: bool,
     /// Modelos: fecha y tamaño del fichero al abrirlo o guardarlo (para saber si otro lo ha cambiado).
     disk: Option<(SystemTime, u64)>,
+    /// Modelos: tamaño con que se abrió y si aún no existía en el juego (avisos de Validación).
+    opened_size: Option<[i32; 3]>,
+    model_new: bool,
 }
 
 impl Default for Editor {
@@ -55,6 +58,8 @@ impl Default for Editor {
             shown: None,
             exporting: false,
             disk: None,
+            opened_size: None,
+            model_new: false,
         }
     }
 }
@@ -175,15 +180,35 @@ impl Editor {
         let text = std::fs::read_to_string(path).with_context(|| format!("no puedo leer {}", path.display()))?;
         let (model, s) = vmodel::load(&text)?;
         let recovered = path == model_recovery_path();
+        let size = s.grid.size;
         self.set_doc(Doc::new_model(model, s, (!recovered).then(|| path.to_path_buf())));
         self.disk = disk_stamp(path).filter(|_| !recovered);
+        self.opened_size = Some(size);
+        self.model_checks();
         Ok(())
     }
 
     /// Modelo nuevo y vacío; no tiene fichero hasta que se guarda.
     pub fn new_model(&mut self, size: [i32; 3]) {
         let (model, s) = Model::new(size);
+        self.adopt_model(model, s);
+    }
+
+    /// Abre como modelo nuevo algo que no viene de un fichero del juego (vacío o importado).
+    pub fn adopt_model(&mut self, model: Model, s: Structure) {
         self.set_doc(Doc::new_model(model, s, None));
+        self.model_new = true;
+        self.model_checks();
+        if let Some(doc) = self.doc.as_mut() {
+            doc.unsaved = true;
+        }
+    }
+
+    /// Modelos: rehace los avisos de la pestaña Validación.
+    fn model_checks(&mut self) {
+        if let Some(doc) = self.doc.as_mut().filter(|d| d.is_model()) {
+            doc.s.checks = vmodel::checks(&doc.s, self.opened_size, self.model_new);
+        }
     }
 
     /// El fichero del modelo abierto ya no es el que se abrió o guardó (un script de arte, git…).
@@ -196,6 +221,8 @@ impl Editor {
 
     fn set_doc(&mut self, doc: Doc) {
         self.disk = None;
+        self.opened_size = None;
+        self.model_new = false;
         self.seen_version = doc.version;
         self.doc = Some(doc);
         self.tools.selection = None;
@@ -276,6 +303,7 @@ impl Editor {
         if version != self.seen_version {
             self.seen_version = version;
             self.touch();
+            self.model_checks();
         }
         let Some(doc) = self.doc.as_ref() else { return };
         // Los modelos no tienen reglas de juego que validar: el generador no interviene.

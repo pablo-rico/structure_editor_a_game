@@ -583,6 +583,34 @@ mod tests {
     }
 
     #[test]
+    fn herramientas_de_modelo() {
+        use tools::Tool;
+        assert!(Tool::BASIC.iter().all(|t| t.for_models()));
+        assert!(!Tool::Build.for_models() && !Tool::Place.for_models());
+        // El pincel «una celda» de un modelo (16 vóxeles) se alinea a su celda, y el de 8 sigue como siempre.
+        assert_eq!(ops::brush([17, 3, 40], 16)[0], [16, 0, 32]);
+        assert_eq!(ops::brush([17, 3, 40], 16).len(), 16 * 16 * 16);
+        assert_eq!(ops::brush([17, 3, 40], 8)[0], [16, 0, 40]);
+    }
+
+    #[test]
+    fn anadir_color_a_la_paleta() {
+        let mut d = chest();
+        let mut p = crate::ui::palette::Palette::default();
+        let n = d.model.as_ref().unwrap().palette.len();
+        assert!(p.add_color(&mut d, [1, 2, 3]));
+        assert_eq!(d.model.as_ref().unwrap().palette.len(), n + 1);
+        assert_eq!(p.selected as usize, n + 1, "queda elegido el color nuevo");
+        // Uno que ya está no se repite: se elige el que había.
+        assert!(p.add_color(&mut d, [1, 2, 3]));
+        assert_eq!(d.model.as_ref().unwrap().palette.len(), n + 1);
+        // Lleno: no añade.
+        d.edit_model("Llenar", |m| m.palette.resize(crate::vmodel::MAX_COLORS, [9, 9, 9]));
+        assert!(!p.add_color(&mut d, [4, 5, 6]));
+        assert_eq!(d.model.as_ref().unwrap().palette.len(), crate::vmodel::MAX_COLORS);
+    }
+
+    #[test]
     fn editar_paleta_se_deshace() {
         let mut d = chest();
         let old = d.model.as_ref().unwrap().palette[0];
