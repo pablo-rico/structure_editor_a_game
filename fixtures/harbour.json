@@ -1,0 +1,135 @@
+{
+  "ms": 0,
+  "size": [
+    40,
+    80,
+    40
+  ],
+  "groundLevel": 1,
+  "bandStarts": [
+    0,
+    23
+  ],
+  "bandFloors": [
+    1,
+    3
+  ],
+  "entrance": [
+    2,
+    -1
+  ],
+  "courtyard": false,
+  "theme": null,
+  "parts": [
+    {
+      "kind": "Door",
+      "pattern": "Solid",
+      "material": "Plank",
+      "box": [
+        18,
+        8,
+        2,
+        23,
+        19,
+        3
+      ],
+      "swing": 1,
+      "detail": false,
+      "startsOpen": true,
+      "locked": false,
+      "cell": [
+        2,
+        0
+      ]
+    }
+  ],
+  "interactables": [
+    {
+      "kind": "Door",
+      "box": [
+        18,
+        8,
+        2,
+        23,
+        19,
+        3
+      ],
+      "arg": 0,
+      "facing": 3
+    },
+    {
+      "kind": "Chair",
+      "box": [
+        19,
+        8,
+        34,
+        21,
+        13,
+        36
+      ],
+      "arg": 0,
+      "facing": 3
+    },
+    {
+      "kind": "HarbourDesk",
+      "box": [
+        16,
+        8,
+        29,
+        24,
+        13,
+        33
+      ],
+      "arg": 0,
+      "facing": 3
+    },
+    {
+      "kind": "Chest",
+      "box": [
+        35,
+        8,
+        31,
+        37,
+        11,
+        35
+      ],
+      "arg": 0,
+      "facing": 1
+    }
+  ],
+  "footprint": null,
+  "nav": {
+    "levels": 11,
+    "cellsX": 5,
+    "cellsZ": 5,
+    "dirs": [
+      "+X",
+      "-X",
+      "+Z",
+      "-Z"
+    ]
+  },
+  "checks": [],
+  "payload": {
+    "grid": 128000,
+    "detail": 128000,
+    "navFloors": 200,
+    "navSlabs": 200,
+    "navEdges": 275
+  },
+  "request": {
+    "kind": "Harbour",
+    "style": "Northern",
+    "fields": {
+      "piece": 2
+    },
+    "seed": 5,
+    "width": 5,
+    "depth": 5,
+    "facing": 3,
+    "foundation": 1,
+    "damage": "Intact",
+    "dynamic": 0,
+    "party": 0
+  }
+}

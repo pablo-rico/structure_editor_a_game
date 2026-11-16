@@ -1,0 +1,81 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Puente del editor de estructuras (docs/contrato.md). Un solo ensamblado con los FUENTES de a_game que hacen falta
+    para construir los planos (asmdef Shared, Lang, Core, World y Generation: el cierre de las referencias de Generation;
+    Nations no entra) más la paleta (Rendering/Terrain3D/StructurePalette.cs) y bridge/src. Mismo patrón que
+    a_game/Tools/SimHarness, con UnityEngine.CoreModule para Vector2Int, Color32, Mathf… (solo código gestionado: lo que
+    llama al motor nativo falla aquí con ECall/SecurityException y no se usa).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>AGame.StructureBridge</AssemblyName>
+    <RootNamespace>AGame.StructureBridge</RootNamespace>
+    <!-- El C# de Unity 6000.3 es el 9: así el puente no acepta lo que Unity no compilaría. -->
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- Sin UNITY_*: el código con #if UNITY_EDITOR / UNITY_5_3_OR_NEWER toma la rama sin motor. -->
+    <!-- Avisos que da el código de Unity y que aquí no aportan (comentarios XML, campos sin usar, etc.). -->
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1574;CS1587;CS0414;CS0649;CS0169;CS0067;CS0162;CS0219;CS0168;CS8632;CS0436</NoWarn>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <AGameRoot Condition="'$(AGameRoot)' == ''">$(MSBuildThisFileDirectory)../../a_game</AGameRoot>
+    <_ProjectVersion>$(AGameRoot)/ProjectSettings/ProjectVersion.txt</_ProjectVersion>
+    <!-- La versión del editor de Unity del proyecto (m_EditorVersion); si no está, la de la fase 0. -->
+    <UnityVersion Condition="'$(UnityVersion)' == '' And Exists('$(_ProjectVersion)')">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(_ProjectVersion)')), 'm_EditorVersion: (\S+)').Groups[1].Value)</UnityVersion>
+    <UnityVersion Condition="'$(UnityVersion)' == ''">6000.3.28f1</UnityVersion>
+    <UnityManaged Condition="'$(UnityManaged)' == ''">/Applications/Unity/Hub/Editor/$(UnityVersion)/Unity.app/Contents/Resources/Scripting/Managed/UnityEngine</UnityManaged>
+    <GameScripts>$(AGameRoot)/Assets/_Game/Scripts/</GameScripts>
+    <DefineConstants>$(DefineConstants);AGAME_STRUCTURE_BRIDGE</DefineConstants>
+    <!--
+      shortcut: las estructuras a mano (export, grupo «authored») solo existen en la rama editor-estructuras-autoria de
+      a_game; hasta que entre, el puente compila sin ellas. Cuando esté en a_game, quita la condición y los #if.
+    -->
+    <DefineConstants Condition="Exists('$(GameScripts)Generation/WorldGen1/Structures/Authored/AuthoredDef.cs')">$(DefineConstants);AGAME_AUTHORED</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>AGameRoot</_Parameter1>
+      <_Parameter2>$([System.IO.Path]::GetFullPath('$(AGameRoot)'))</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>UnityVersion</_Parameter1>
+      <_Parameter2>$(UnityVersion)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="src/*.cs" />
+    <!-- Cierre de referencias AGame.* de los .asmdef: Generation → Core, World, Shared; Core → Lang (si existe). -->
+    <Compile Include="$(GameScripts)Shared/**/*.cs" Link="Game/Shared/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(GameScripts)Lang/**/*.cs" Link="Game/Lang/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(GameScripts)Core/**/*.cs" Link="Game/Core/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(GameScripts)World/**/*.cs" Link="Game/World/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(GameScripts)Generation/**/*.cs" Link="Game/Generation/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(GameScripts)Rendering/Terrain3D/StructurePalette.cs" Link="Game/Rendering/StructurePalette.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(UnityManaged)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Unity.Mathematics">
+      <HintPath>$(AGameRoot)/Library/ScriptAssemblies/Unity.Mathematics.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Unity.Collections">
+      <HintPath>$(AGameRoot)/Library/ScriptAssemblies/Unity.Collections.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,101 @@
+{
+  "ms": 0,
+  "size": [
+    48,
+    112,
+    48
+  ],
+  "groundLevel": 1,
+  "bandStarts": [
+    0,
+    47,
+    63
+  ],
+  "bandFloors": [
+    1,
+    6,
+    8
+  ],
+  "entrance": [
+    1,
+    -1
+  ],
+  "courtyard": false,
+  "theme": null,
+  "parts": [
+    {
+      "kind": "Door",
+      "pattern": "Solid",
+      "material": "DarkTimber",
+      "box": [
+        10,
+        8,
+        9,
+        14,
+        20,
+        10
+      ],
+      "swing": 1,
+      "detail": false,
+      "startsOpen": true,
+      "locked": false,
+      "cell": [
+        1,
+        1
+      ]
+    }
+  ],
+  "interactables": [
+    {
+      "kind": "Door",
+      "box": [
+        10,
+        8,
+        9,
+        14,
+        20,
+        10
+      ],
+      "arg": 0,
+      "facing": 3
+    }
+  ],
+  "footprint": "AAAAAAAAAAEBAQEAAQEBAQEBAQEBAQEBAAEBAQEAAAABAQAA",
+  "nav": {
+    "levels": 15,
+    "cellsX": 6,
+    "cellsZ": 6,
+    "dirs": [
+      "+X",
+      "-X",
+      "+Z",
+      "-Z"
+    ]
+  },
+  "checks": [],
+  "payload": {
+    "grid": 258048,
+    "detail": 258048,
+    "navFloors": 288,
+    "navSlabs": 288,
+    "navEdges": 540
+  },
+  "request": {
+    "kind": "WallTower",
+    "style": "Northern",
+    "fields": {
+      "rise": 1,
+      "scaffold": 0,
+      "ports": 7,
+      "doorRight": 0
+    },
+    "seed": 77,
+    "width": 6,
+    "depth": 6,
+    "facing": 3,
+    "foundation": 1,
+    "damage": "Intact",
+    "dynamic": 0,
+    "party": 0
+  }
+}

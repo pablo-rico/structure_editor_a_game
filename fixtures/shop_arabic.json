@@ -1,0 +1,113 @@
+{
+  "ms": 0,
+  "size": [
+    48,
+    56,
+    56
+  ],
+  "groundLevel": 1,
+  "bandStarts": [
+    0,
+    23,
+    39
+  ],
+  "bandFloors": [
+    1,
+    3,
+    5
+  ],
+  "entrance": [
+    1,
+    -1
+  ],
+  "courtyard": false,
+  "theme": null,
+  "parts": [
+    {
+      "kind": "Door",
+      "pattern": "Solid",
+      "material": "Cedar",
+      "box": [
+        10,
+        8,
+        10,
+        14,
+        19,
+        11
+      ],
+      "swing": 1,
+      "detail": false,
+      "startsOpen": true,
+      "locked": false,
+      "cell": [
+        1,
+        1
+      ]
+    }
+  ],
+  "interactables": [
+    {
+      "kind": "Door",
+      "box": [
+        10,
+        8,
+        10,
+        14,
+        19,
+        11
+      ],
+      "arg": 0,
+      "facing": 3
+    },
+    {
+      "kind": "Counter",
+      "box": [
+        13,
+        8,
+        15,
+        37,
+        13,
+        18
+      ],
+      "arg": 0,
+      "facing": 2
+    }
+  ],
+  "footprint": null,
+  "nav": {
+    "levels": 8,
+    "cellsX": 6,
+    "cellsZ": 7,
+    "dirs": [
+      "+X",
+      "-X",
+      "+Z",
+      "-Z"
+    ]
+  },
+  "checks": [],
+  "payload": {
+    "grid": 150528,
+    "detail": 150528,
+    "navFloors": 336,
+    "navSlabs": 336,
+    "navEdges": 336
+  },
+  "request": {
+    "kind": "Shop",
+    "style": "Arabic",
+    "fields": {
+      "shop": 0,
+      "district": 3,
+      "tier": 2
+    },
+    "seed": 4321,
+    "width": 6,
+    "depth": 7,
+    "facing": 3,
+    "foundation": 1,
+    "damage": "Intact",
+    "dynamic": 0,
+    "party": 0
+  }
+}

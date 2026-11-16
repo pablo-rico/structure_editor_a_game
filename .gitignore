@@ -1,0 +1,5 @@
+/target
+/target-*
+bridge/bin/
+bridge/obj/
+.DS_Store

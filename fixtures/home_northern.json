@@ -1,0 +1,259 @@
+{
+  "ms": 0,
+  "size": [
+    40,
+    120,
+    40
+  ],
+  "groundLevel": 1,
+  "bandStarts": [
+    0,
+    23,
+    39,
+    55
+  ],
+  "bandFloors": [
+    1,
+    3,
+    5,
+    7
+  ],
+  "entrance": [
+    2,
+    -1
+  ],
+  "courtyard": false,
+  "theme": null,
+  "parts": [
+    {
+      "kind": "Door",
+      "pattern": "Solid",
+      "material": "Plank",
+      "box": [
+        18,
+        8,
+        2,
+        23,
+        19,
+        3
+      ],
+      "swing": 1,
+      "detail": false,
+      "startsOpen": true,
+      "locked": false,
+      "cell": [
+        2,
+        0
+      ]
+    }
+  ],
+  "interactables": [
+    {
+      "kind": "Door",
+      "box": [
+        18,
+        8,
+        2,
+        23,
+        19,
+        3
+      ],
+      "arg": 0,
+      "facing": 3
+    },
+    {
+      "kind": "Chair",
+      "box": [
+        13,
+        8,
+        13,
+        15,
+        10,
+        15
+      ],
+      "arg": 0,
+      "facing": 2
+    },
+    {
+      "kind": "Chair",
+      "box": [
+        13,
+        8,
+        17,
+        15,
+        10,
+        19
+      ],
+      "arg": 0,
+      "facing": 2
+    },
+    {
+      "kind": "Chair",
+      "box": [
+        17,
+        8,
+        13,
+        19,
+        10,
+        15
+      ],
+      "arg": 0,
+      "facing": 2
+    },
+    {
+      "kind": "Chair",
+      "box": [
+        17,
+        8,
+        17,
+        19,
+        10,
+        19
+      ],
+      "arg": 0,
+      "facing": 2
+    },
+    {
+      "kind": "Bed",
+      "box": [
+        29,
+        24,
+        3,
+        34,
+        29,
+        13
+      ],
+      "arg": 0,
+      "facing": 2
+    },
+    {
+      "kind": "Chest",
+      "box": [
+        30,
+        24,
+        14,
+        34,
+        27,
+        16
+      ],
+      "arg": 0,
+      "facing": 2
+    },
+    {
+      "kind": "Bed",
+      "box": [
+        21,
+        24,
+        3,
+        26,
+        29,
+        13
+      ],
+      "arg": 0,
+      "facing": 2
+    },
+    {
+      "kind": "Chest",
+      "box": [
+        22,
+        24,
+        14,
+        26,
+        27,
+        16
+      ],
+      "arg": 1,
+      "facing": 2
+    },
+    {
+      "kind": "Bed",
+      "box": [
+        29,
+        40,
+        3,
+        34,
+        45,
+        13
+      ],
+      "arg": 0,
+      "facing": 2
+    },
+    {
+      "kind": "Chest",
+      "box": [
+        30,
+        40,
+        14,
+        34,
+        43,
+        16
+      ],
+      "arg": 2,
+      "facing": 2
+    },
+    {
+      "kind": "Bed",
+      "box": [
+        21,
+        40,
+        3,
+        26,
+        45,
+        13
+      ],
+      "arg": 0,
+      "facing": 2
+    },
+    {
+      "kind": "Chest",
+      "box": [
+        22,
+        40,
+        14,
+        26,
+        43,
+        16
+      ],
+      "arg": 3,
+      "facing": 2
+    }
+  ],
+  "footprint": null,
+  "nav": {
+    "levels": 16,
+    "cellsX": 5,
+    "cellsZ": 5,
+    "dirs": [
+      "+X",
+      "-X",
+      "+Z",
+      "-Z"
+    ]
+  },
+  "checks": [],
+  "payload": {
+    "grid": 192000,
+    "detail": 192000,
+    "navFloors": 200,
+    "navSlabs": 200,
+    "navEdges": 400
+  },
+  "request": {
+    "kind": "Home",
+    "style": "Northern",
+    "fields": {
+      "design": 2,
+      "rank": 1,
+      "district": 0,
+      "tier": 1
+    },
+    "seed": 1234,
+    "width": 5,
+    "depth": 5,
+    "facing": 3,
+    "foundation": 1,
+    "damage": "Intact",
+    "dynamic": 0,
+    "party": 0
+  }
+}

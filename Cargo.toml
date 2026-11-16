@@ -1,0 +1,27 @@
+[package]
+name = "structure_editor_a_game"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.23.1"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "persistence", "default_fonts", "accesskit", "links"] }
+egui-phosphor = "0.14"
+egui_dock = { version = "0.21", features = ["serde"] }
+glam = "0.34.3"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+notify = "8"
+rfd = "0.18.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+# Compilación de desarrollo ágil sin que target/ se dispare (como PlusAstra): lo nuestro a opt 1, las dependencias a 3.
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = false
