@@ -5731,6 +5731,46 @@
       "label": "Árabe"
     }
   ],
+  "districts": [
+    {
+      "name": "Residential",
+      "label": "Residencial"
+    },
+    {
+      "name": "Noble",
+      "label": "Noble"
+    },
+    {
+      "name": "Poor",
+      "label": "Arrabal"
+    },
+    {
+      "name": "Market",
+      "label": "Mercado"
+    },
+    {
+      "name": "Artisan",
+      "label": "Artesano"
+    }
+  ],
+  "tiers": [
+    {
+      "name": "Poor",
+      "label": "Pobre"
+    },
+    {
+      "name": "Modest",
+      "label": "Modesta"
+    },
+    {
+      "name": "WellOff",
+      "label": "Acomodada"
+    },
+    {
+      "name": "Rich",
+      "label": "Rica"
+    }
+  ],
   "facings": [
     {
       "value": 3,

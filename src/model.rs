@@ -114,6 +114,8 @@ pub struct Structure {
     pub footprint: Option<Vec<u8>>,
     pub nav: Nav,
     pub checks: Vec<Check>,
+    /// Nombre de la sustitución hecha a mano si lo construido no es el plano procedural del juego.
+    pub override_by: Option<String>,
 }
 
 #[cfg(test)]

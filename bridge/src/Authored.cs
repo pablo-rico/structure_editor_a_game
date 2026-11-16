@@ -30,131 +30,15 @@ namespace AGame.StructureBridge
             Description = "Estructura dibujada a mano en el editor y exportada al juego.",
         };
 
-        static T Named<T>(string name, string what, List<string> errors) where T : struct, Enum
-        {
-            // Solo nombres del enum (Enum.TryParse también aceptaría «5»).
-            if (name != null && Enum.GetNames(typeof(T)).Contains(name)) return Enum.Parse<T>(name);
-            errors.Add($"El juego no tiene {what} «{name}».");
-            return default;
-        }
-
-        static int[] Ints(JsonElement j) => j.EnumerateArray().Select(e => e.GetInt32()).ToArray();
-
-        static object Voxel(int[] box) => new { voxel = new[] { box[0], box[1], box[2] } };
-
-        static void Error(List<object> checks, string code, string message, object at) =>
-            checks.Add(new { severity = "error", code, message, at });
-
-        /// <summary>Partes del contrato (<c>Part</c> de proto.rs) a <see cref="VoxelPart"/>; las que no se entienden, a checks.</summary>
-        static List<VoxelPart> Parts(JsonElement j, List<object> checks)
-        {
-            var list = new List<VoxelPart>();
-            if (j.ValueKind != JsonValueKind.Array) return list;
-            foreach (var p in j.EnumerateArray())
-            {
-                var errors = new List<string>();
-                var kind = Named<PartKind>(p.GetProperty("kind").GetString(), "la parte", errors);
-                var pattern = Named<PartPattern>(p.TryGetProperty("pattern", out var v) ? v.GetString() : "Solid", "el dibujo de parte", errors);
-                var material = Named<StructureMaterial>(p.GetProperty("material").GetString(), "el material", errors);
-                var b = Ints(p.GetProperty("box"));
-                if (b.Length != 6 || b[0] >= b[3] || b[1] >= b[4] || b[2] >= b[5]) errors.Add("La caja de la parte está vacía o mal formada.");
-                bool Bool(string key) => p.TryGetProperty(key, out var x) && x.ValueKind == JsonValueKind.True;
-                if (errors.Count > 0)
-                {
-                    Error(checks, "bad-part", $"Parte {list.Count + 1}: {string.Join(" ", errors)}", b.Length >= 3 ? Voxel(b) : null);
-                    continue;
-                }
-                int swing = p.TryGetProperty("swing", out v) ? v.GetInt32() : 1;
-                list.Add(new VoxelPart(kind, pattern, material, b[0], b[1], b[2], b[3], b[4], b[5], swing, Bool("detail"),
-                    Bool("startsOpen"), Bool("locked")));
-            }
-            return list;
-        }
-
-        static List<VoxelInteractable> Interactables(JsonElement j, List<object> checks)
-        {
-            var list = new List<VoxelInteractable>();
-            if (j.ValueKind != JsonValueKind.Array) return list;
-            foreach (var it in j.EnumerateArray())
-            {
-                var errors = new List<string>();
-                var kind = Named<InteractKind>(it.GetProperty("kind").GetString(), "la pieza", errors);
-                var b = Ints(it.GetProperty("box"));
-                if (b.Length != 6) errors.Add("La caja de la pieza está mal formada.");
-                if (errors.Count > 0)
-                {
-                    Error(checks, "bad-interactable", string.Join(" ", errors), b.Length >= 3 ? Voxel(b) : null);
-                    continue;
-                }
-                int arg = it.TryGetProperty("arg", out var v) ? v.GetInt32() : 0;
-                int facing = it.TryGetProperty("facing", out v) ? v.GetInt32() : 3;
-                list.Add(new VoxelInteractable(kind, b[0], b[1], b[2], b[3], b[4], b[5], arg, (byte)(facing & 3)));
-            }
-            return list;
-        }
-
-        // ------------------------------------------------------------------ validate
-
         /// <summary>
         /// <c>validate</c>: la rejilla del editor (sin girar) con su cabecera → la misma respuesta que <c>build</c> sin la
         /// rejilla. Las partes se pintan en su estado (<c>dynamic</c>, 0 por defecto), como en el juego.
         /// </summary>
         public static BuildResult Validate(JsonElement h, byte[] payload)
         {
-            var r = new BuildResult { Def = Def, Request = new BuildRequest { Kind = Def.Name } };
-            var size = Ints(h.GetProperty("size"));
-            const int s = WorldConstants.SubPerCell;
-            if (size.Length != 3 || size.Any(n => n <= 0) || size[0] % s != 0 || size[2] % s != 0)
-                throw new BridgeException($"La rejilla tiene que medir celdas enteras ({s} sub-cubos) de ancho y de fondo.");
-            int n = size[0] * size[1] * size[2];
-            bool hasDetail = h.TryGetProperty("hasDetail", out var hd) && hd.ValueKind == JsonValueKind.True;
-            if (payload.Length != n * (hasDetail ? 2 : 1))
-                throw new BridgeException($"La carga trae {payload.Length} bytes y la rejilla pide {n * (hasDetail ? 2 : 1)}.");
-
-            var grid = new VoxelGrid(size[0], size[1], size[2]);
-            int maxMaterial = Enum.GetValues(typeof(StructureMaterial)).Cast<byte>().Max(), unknown = 0;
-            int[] firstUnknown = null;
-            for (int i = 0; i < n; i++)
-            {
-                byte m = payload[i];
-                bool detail = hasDetail && payload[n + i] != 0;
-                if (m == 0 && !detail) continue;
-                int x = i % size[0], row = i / size[0], z = row % size[2], y = row / size[2];
-                if (m > maxMaterial && unknown++ == 0) firstUnknown = new[] { x, y, z };
-                grid.MarkDetail = detail;
-                grid.Set(x, y, z, (StructureMaterial)m);
-            }
-            grid.MarkDetail = false;
-            if (unknown > 0)
-                Error(r.Checks, "unknown-material", $"Hay {(unknown == 1 ? "un sub-cubo" : unknown + " sub-cubos")} con un material que el juego no tiene.", Voxel(firstUnknown));
-
-            var parts = Parts(h.TryGetProperty("parts", out var pj) ? pj : default, r.Checks);
-            var items = Interactables(h.TryGetProperty("interactables", out var ij) ? ij : default, r.Checks);
-            uint dynamic = h.TryGetProperty("dynamic", out var dj) && dj.ValueKind == JsonValueKind.Number ? dj.GetUInt32() : 0;
-            StructureParts.Apply(grid, parts, dynamic);
-
-            var entrance = Ints(h.GetProperty("entrance"));
-            int ground = h.GetProperty("groundLevel").GetInt32();
-            if (entrance.Length != 2 || entrance[1] != -1 || entrance[0] < 0 || entrance[0] >= size[0] / s)
-                Error(r.Checks, "bad-entrance", "La entrada tiene que ser una celda de la fachada sur, justo fuera (z = −1).",
-                    entrance.Length == 2 ? new { cell = entrance, level = ground } : null);
-            try
-            {
-                r.Build = new StructureBuild(Kind, grid, ground, Ints(h.GetProperty("bandStarts")), Ints(h.GetProperty("bandFloors")),
-                    new Vector2Int(entrance[0], entrance.Length > 1 ? entrance[1] : -1),
-                    h.TryGetProperty("courtyard", out var cy) && cy.ValueKind == JsonValueKind.True);
-            }
-            catch (ArgumentException e)
-            {
-                throw new BridgeException("Las plantas no casan: " + e.Message);
-            }
-            if (parts.Count > 0)
-            {
-                r.Build.Parts = parts;
-                r.Build.PartCells = parts.Select(p => StructureParts.CellOf(p)).ToArray();
-            }
-            r.Build.Interactables = items;
-            Checks.Run(r);
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var r = Doc.Parse(h, payload).Result();
+            r.Ms = watch.Elapsed.TotalMilliseconds;
             return r;
         }
 
@@ -166,6 +50,7 @@ namespace AGame.StructureBridge
             public string File, Rel, Pascal, Name;
             public int? Id;
             public AuthoredDef Def;
+            public Replaces Replaces;
             public readonly List<object> Checks = new List<object>();
             public bool Failed => Checks.Any(c => JsonSerializer.SerializeToElement(c).GetProperty("severity").GetString() == "error");
         }
@@ -193,10 +78,14 @@ namespace AGame.StructureBridge
                 .Select(f => Read(f, root)).ToList();
             foreach (var g in sources.Where(x => x.Id.HasValue).GroupBy(x => x.Id.Value).Where(g => g.Count() > 1))
                 foreach (var x in g)
-                    Error(x.Checks, "duplicate-id", $"El id {g.Key} lo tienen también: {string.Join(", ", g.Where(o => o != x).Select(o => o.Rel))}.", null);
+                    Json.Error(x.Checks, "duplicate-id", $"El id {g.Key} lo tienen también: {string.Join(", ", g.Where(o => o != x).Select(o => o.Rel))}.", null);
             foreach (var g in sources.Where(x => x.Pascal != null).GroupBy(x => x.Pascal).Where(g => g.Count() > 1))
                 foreach (var x in g)
-                    Error(x.Checks, "duplicate-name", $"El nombre de fichero da la misma clase (Authored{g.Key}) que otra fuente: cámbiale el nombre.", null);
+                    Json.Error(x.Checks, "duplicate-name", $"El nombre de fichero da la misma clase (Authored{g.Key}) que otra fuente: cámbiale el nombre.", null);
+            foreach (var g in sources.Where(x => x.Replaces != null).GroupBy(x => x.Replaces.Key).Where(g => g.Count() > 1))
+                foreach (var x in g)
+                    Json.Error(x.Checks, "duplicate-override",
+                        $"Sustituye a lo mismo que {string.Join(", ", g.Where(o => o != x).Select(o => o.Rel))}: solo puede quedar una.", null);
             foreach (var x in sources.Where(x => x.Def != null && !x.Failed)) Check(x);
 
             bool ok = sources.All(x => !x.Failed);
@@ -249,31 +138,44 @@ namespace AGame.StructureBridge
                 x.Name = j.GetProperty("name").GetString();
                 if (j.TryGetProperty("id", out var idj) && idj.ValueKind == JsonValueKind.Number) x.Id = idj.GetInt32();
                 if (x.Id == null || x.Id <= 0)
-                    Error(x.Checks, "missing-id", "No tiene id: el editor se lo pone (el máximo + 1) antes de exportar.", null);
+                    Json.Error(x.Checks, "missing-id", "No tiene id: el editor se lo pone (el máximo + 1) antes de exportar.", null);
 
                 var errors = new List<string>();
-                var style = Named<ArchStyle>(j.TryGetProperty("style", out var sj) ? sj.GetString() : "Northern", "el estilo", errors);
+                var style = Json.Named<ArchStyle>(j.TryGetProperty("style", out var sj) ? sj.GetString() : "Northern", "el estilo", errors);
                 var materials = j.GetProperty("materials").EnumerateArray()
-                    .Select(m => Named<StructureMaterial>(m.GetString(), "el material", errors)).ToArray();
-                foreach (var e in errors) Error(x.Checks, "unknown-name", e, null);
-                var parts = Parts(j.GetProperty("parts"), x.Checks);
-                var items = Interactables(j.GetProperty("interactables"), x.Checks);
-                var bands = j.GetProperty("bands").EnumerateArray().Select(Ints).ToArray();
-                var size = Ints(j.GetProperty("size"));
+                    .Select(m => Json.Named<StructureMaterial>(m.GetString(), "el material", errors)).ToArray();
+                foreach (var e in errors) Json.Error(x.Checks, "unknown-name", e, null);
+                var parts = Json.Parts(j.GetProperty("parts"), x.Checks);
+                var items = Json.Interactables(j.GetProperty("interactables"), x.Checks);
+                var bands = j.GetProperty("bands").EnumerateArray().Select(Json.Ints).ToArray();
+                var size = Json.Ints(j.GetProperty("size"));
+                var replaceErrors = new List<string>();
+                x.Replaces = Replaces.Parse(j.TryGetProperty("replaces", out var rj) ? rj : default, replaceErrors);
+                foreach (var e in replaceErrors) Json.Error(x.Checks, "bad-replaces", e, null);
                 if (x.Failed) return x;
+                var rp = x.Replaces;
                 x.Def = new AuthoredDef(x.Id.Value, x.Name, style, size[0], size[1], size[2], j.GetProperty("groundLevel").GetInt32(),
                     bands.Select(b => b[0]).ToArray(), bands.Select(b => b[1]).ToArray(), j.GetProperty("entranceX").GetInt32(),
                     j.TryGetProperty("courtyard", out var cy) && cy.ValueKind == JsonValueKind.True, materials,
                     j.GetProperty("voxels").GetString(),
                     j.TryGetProperty("detail", out var dj) && dj.ValueKind == JsonValueKind.String ? dj.GetString() : null,
+#if AGAME_OVERRIDES
+                    parts.ToArray(), items.ToArray(), x.Rel, rp?.Kind, rp?.Design ?? 0, rp?.Party ?? 0, rp?.Rank,
+                    rp?.District, rp?.Tier);
+#else
                     parts.ToArray(), items.ToArray());
+                if (rp != null)
+                    Json.Error(x.Checks, "bad-replaces", "Este a_game aún no admite sustituciones de diseños del juego.", null);
+#endif
+                if (rp != null && rp.Style != style)
+                    Json.Error(x.Checks, "override-style", $"La estructura es {Catalog.StyleLabel(style)} y sustituye a una {Catalog.StyleLabel(rp.Style)}.", null);
                 AuthoredGrid.Decode(x.Def); // el RLE, con el decodificador del juego
             }
             catch (Exception e) when (e is FormatException || e is ArgumentException || e is JsonException ||
                                       e is KeyNotFoundException || e is InvalidOperationException || e is IndexOutOfRangeException)
             {
                 x.Def = null;
-                Error(x.Checks, "bad-file", $"No se puede leer: {e.Message}", null);
+                Json.Error(x.Checks, "bad-file", $"No se puede leer: {e.Message}", null);
             }
             return x;
         }
@@ -299,10 +201,11 @@ namespace AGame.StructureBridge
                 }
                 catch (Exception e)
                 {
-                    Error(x.Checks, "build-failed", $"Ha fallado al construirse hacia {Catalog.DirNames[facing]}: {e.Message}", null);
+                    Json.Error(x.Checks, "build-failed", $"Ha fallado al construirse hacia {Catalog.DirNames[facing]}: {e.Message}", null);
                     return;
                 }
                 Checks.Run(r);
+                if (turns == 0) x.Replaces?.Check(r.Build, x.Def.EntranceX, x.Def.Courtyard, r.Checks);
                 foreach (var c in r.Checks)
                 {
                     var e = JsonSerializer.SerializeToElement(c);
@@ -396,7 +299,20 @@ namespace AGame.StructureBridge
             foreach (var it in d.Interactables)
                 sb.Append($"{I}    new VoxelInteractable(InteractKind.{it.Kind}, {it.X0}, {it.Y0}, {it.Z0}, {it.X1}, {it.Y1}, {it.Z1}, " +
                           $"arg: {it.Arg}, facing: {it.Facing}),\n");
+#if AGAME_OVERRIDES
+            sb.Append($"{I}}},\n{I}source: {Literal(x.Rel)}");
+            if (d.Replaces.HasValue)
+            {
+                // Sustitución (docs/ciudades.md, «Estructuras a mano»): lo que sustituye, por nombre de enum.
+                sb.Append($",\n{I}replaces: StructureKind.{d.Replaces}, design: {d.Design}, party: {d.Party}");
+                if (d.Rank.HasValue) sb.Append($", rank: {d.Rank}");
+                if (d.District.HasValue) sb.Append($", district: CityDistrict.{d.District}");
+                if (d.Tier.HasValue) sb.Append($", tier: DistrictTier.{d.Tier}");
+            }
+            sb.Append(");\n    }\n}\n");
+#else
             sb.Append($"{I}}});\n    }}\n}}\n");
+#endif
             return sb.ToString();
         }
 

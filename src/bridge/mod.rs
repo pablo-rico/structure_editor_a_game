@@ -22,19 +22,24 @@ pub struct Paths {
 
 /// Fuentes del puente dentro del binario: una versión publicada no trae el repo, así que las escribe en la carpeta de
 /// datos y las compila allí (`Paths::prepare`).
-const BRIDGE_SOURCES: [(&str, &str); 6] = [
+const BRIDGE_SOURCES: [(&str, &str); 9] = [
     ("bridge/AGame.StructureBridge.csproj", include_str!("../../bridge/AGame.StructureBridge.csproj")),
     ("bridge/src/Program.cs", include_str!("../../bridge/src/Program.cs")),
     ("bridge/src/Catalog.cs", include_str!("../../bridge/src/Catalog.cs")),
     ("bridge/src/Builder.cs", include_str!("../../bridge/src/Builder.cs")),
     ("bridge/src/Checks.cs", include_str!("../../bridge/src/Checks.cs")),
     ("bridge/src/Authored.cs", include_str!("../../bridge/src/Authored.cs")),
+    ("bridge/src/Doc.cs", include_str!("../../bridge/src/Doc.cs")),
+    ("bridge/src/Tools.cs", include_str!("../../bridge/src/Tools.cs")),
+    ("bridge/src/Furniture.cs", include_str!("../../bridge/src/Furniture.cs")),
 ];
 
 impl Paths {
     /// En desarrollo (hay checkout del repo) el puente se compila en `bridge/`; en una versión publicada, en la carpeta
     /// de datos, por versión.
     pub fn new(agame_root: PathBuf) -> Self {
+        // dotnet resuelve las rutas relativas desde bridge/, no desde aquí: siempre absoluta.
+        let agame_root = std::path::absolute(&agame_root).unwrap_or(agame_root);
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let editor_root = if repo.join("bridge/AGame.StructureBridge.csproj").is_file() {
             repo

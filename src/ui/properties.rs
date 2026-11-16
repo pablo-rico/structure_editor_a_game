@@ -20,7 +20,14 @@ pub const MAX_PARTS: usize = 16;
 #[derive(Default)]
 pub struct Resize(pub Option<[i32; 3]>);
 
+/// Explicaciones de los candados de un diseño del juego (§10).
+pub const LOCK_SIZE: &str = "Este diseño tiene ese tamaño en el juego. Para otro tamaño, pulsa «Convertir en estructura propia» (arriba).";
+pub const LOCK_DOOR: &str = "El juego pone la calle delante de esta celda. Puedes cambiar la hoja, no su sitio.";
+pub const LOCK_STYLE: &str = "Es el estilo del diseño del juego que sustituyes.";
+
 pub fn ui(ui: &mut Ui, cat: &Catalog, doc: &mut Doc, selection: Option<([i32; 3], [i32; 3])>, resize: &mut Resize) {
+    // Sustituir un diseño del juego fija estilo, tamaño y puerta (los niveles quedan libres).
+    let locked = doc.meta.replaces.is_some();
     let mut e = doc.extras();
     let before = e.clone();
     let mut label = "Propiedades";
@@ -28,24 +35,31 @@ pub fn ui(ui: &mut Ui, cat: &Catalog, doc: &mut Doc, selection: Option<([i32; 3]
     egui::CollapsingHeader::new(RichText::new("Estructura").font(theme::semibold(13.0))).default_open(true).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label("Nombre");
-            if ui.text_edit_singleline(&mut e.meta.name).changed() {
+            let r = ui.add_enabled(!locked, egui::TextEdit::singleline(&mut e.meta.name));
+            if r.on_disabled_hover_text("El nombre lo da el diseño del juego que sustituyes.").changed() {
                 label = "Nombre";
             }
         });
-        section(ui, "Estilo");
+        if locked {
+            ui.label(dim(format!("{} Lo fija el juego: estilo, tamaño y sitio de la puerta.", icon::LOCK_SIMPLE)));
+        }
+        section(ui, &lock_label("Estilo", locked));
         let styles: Vec<(String, String)> = cat.styles.iter().map(|s| (s.name.clone(), s.label.clone())).collect();
-        if widgets::segmented(ui, &mut e.meta.style, &styles) {
+        let r = ui.add_enabled_ui(!locked, |ui| widgets::segmented(ui, &mut e.meta.style, &styles));
+        r.response.on_disabled_hover_text(LOCK_STYLE);
+        if r.inner {
             label = "Estilo";
         }
         if let Some(id) = e.meta.id {
             ui.label(dim(format!("En el juego: estructura a mano nº {id}")));
         }
-        size_editor(ui, doc, resize);
-        section(ui, "Entrada");
+        size_editor(ui, doc, resize, locked);
+        section(ui, &lock_label("Entrada", locked));
         let cells = doc.s.grid.cells();
         ui.horizontal(|ui| {
             ui.label("Puerta en la celda");
-            if ui.add(DragValue::new(&mut e.entrance[0]).range(0..=cells[0] - 1)).changed() {
+            let r = ui.add_enabled(!locked, DragValue::new(&mut e.entrance[0]).range(0..=cells[0] - 1));
+            if r.on_disabled_hover_text(LOCK_DOOR).changed() {
                 label = "Entrada";
             }
         });
@@ -69,16 +83,21 @@ pub fn ui(ui: &mut Ui, cat: &Catalog, doc: &mut Doc, selection: Option<([i32; 3]
     }
 }
 
-fn size_editor(ui: &mut Ui, doc: &mut Doc, resize: &mut Resize) {
-    section(ui, "Tamaño (celdas)");
+/// Etiqueta de sección con candado si el juego la fija.
+fn lock_label(text: &str, locked: bool) -> String {
+    if locked { format!("{} {text}", icon::LOCK_SIMPLE) } else { text.to_string() }
+}
+
+fn size_editor(ui: &mut Ui, doc: &mut Doc, resize: &mut Resize, locked: bool) {
+    section(ui, &lock_label("Tamaño (celdas)", locked));
     let g = &doc.s.grid;
     let now = [g.size[0] / SUB, g.size[1] / SUB, g.size[2] / SUB];
     let mut want = resize.0.unwrap_or(now);
     ui.horizontal(|ui| {
         ui.label("Ancho");
-        ui.add(DragValue::new(&mut want[0]).range(1..=64));
+        ui.add_enabled(!locked, DragValue::new(&mut want[0]).range(1..=64)).on_disabled_hover_text(LOCK_SIZE);
         ui.label("Fondo");
-        ui.add(DragValue::new(&mut want[2]).range(1..=64));
+        ui.add_enabled(!locked, DragValue::new(&mut want[2]).range(1..=64)).on_disabled_hover_text(LOCK_SIZE);
         ui.label("Niveles");
         ui.add(DragValue::new(&mut want[1]).range(1..=60));
     });

@@ -35,7 +35,8 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
 - Visor suelto: `cargo run --example visor` (ventana), `-- --shots` (PNG de las fixtures en `target-render/shots/`),
   `-- --egui` (un fotograma real de `Viewport::ui`).
 - **Ver la app sin permiso de grabación de pantalla:** `EDITOR_CAPTURA=/ruta.png [EDITOR_TIPO=Shop]
-  [EDITOR_MODO=editar] ./target/release/structure_editor_a_game` guarda la ventana cuando ya se ve la estructura y
+  [EDITOR_MODO=editar] [EDITOR_BIBLIOTECA=estructuras|juego|piezas] [EDITOR_HERRAMIENTA=room] [EDITOR_BUSCAR=…]
+  [EDITOR_VOX=/ruta.vox] ./target/release/structure_editor_a_game` guarda la ventana cuando ya se ve la estructura y
   sale. Lee el PNG para revisar la interfaz.
 - Varios agentes a la vez: cada uno sus ficheros, su `CARGO_TARGET_DIR=target-<nombre>` (ignorado por git) y
   `rustfmt --edition 2024` solo sobre los suyos.
@@ -57,6 +58,9 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
   `ops` (formas, relleno, extruir, portapapeles con el giro de `RotateQuarter`), `tools` (máquina de estados de las
   herramientas). `src/editor.rs`: documento abierto, guardar/abrir, validación en vivo (300 ms), exportar, recuperación.
 - `src/platform.rs`: carpeta de datos y personal, mostrar en el explorador, procesos sin consola en Windows.
+- `src/vox.rs`: MagicaVoxel (`dot_vox`): leer juntando modelos, asociar colores a materiales, escribir. Ejes: Y del
+  `.vox` = −Z del juego, Z del `.vox` = Y del juego (sin reflejar).
+- `src/ui/library.rs` (Biblioteca), `src/ui/vox_dialog.rs` (importar `.vox`).
 - `src/app/`: `mod.rs` (estado, docks por modo, barra superior y de estado, primer arranque, Cmd+K, atajos), `view.rs`
   (Vista con controles flotantes, Muestrario, Comparar, captura), `edit.rs` (modo Editar). `src/ui/`: paneles y
   controles (`widgets.rs` tiene segmentado, paso a paso, conmutador, chip, toasts).
@@ -90,6 +94,11 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
   y `party` se mandan sin girar; `cut_level` del visor es el nivel del suelo de la planta (`band_floors[i]`).
 - **Paridad:** si tocas el mallado o el shader, `VoxelTone` usa aritmética u32 *wrapping* exacta a la del HLSL; los
   hashes de las 5 muestras (`selftest --hashes`) deben seguir iguales a los de Unity.
+- **Fase 3 (contrato):** `stamp` lleva el mueble en `piece` (`id` es el de la trama y `Process::request` lo pisa). La
+  «clave de diseño» de una sustitución es `design`, `shop`, `prop`, `oldGate` o `gateTower` según el tipo
+  (`library::design_field`). El puente define `AGAME_OVERRIDES` solo si el a_game tiene sustituciones (`shortcut:` en el
+  `.csproj`). Las herramientas de construcción las aplica el puente sobre el documento entero y devuelven el resultado
+  completo: Rust lo enseña como vista previa y lo confirma con `Doc::apply_external` (un paso de deshacer).
 - **Fixtures:** ~9 MB (`schooltower.bin` es 7,6 MB). No las rehagas sin motivo.
 
 ## Publicar una versión

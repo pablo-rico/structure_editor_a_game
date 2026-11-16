@@ -28,6 +28,9 @@ namespace AGame.StructureBridge
         public int Seed = 1, Width, Depth, Facing = StructureRotation.DefaultFacing, Foundation = 1;
         public uint Dynamic, Party;
 
+        /// <summary>El plano del juego aunque haya una sustitución hecha a mano (docs/contrato.md, fase 3).</summary>
+        public bool Procedural;
+
         /// <summary>Valores por defecto del tipo, con la huella mínima.</summary>
         public static BuildRequest Default(KindDef d, int seed = 1)
         {
@@ -56,6 +59,7 @@ namespace AGame.StructureBridge
             r.Foundation = Int("foundation", r.Foundation);
             r.Dynamic = j.TryGetProperty("dynamic", out v) && v.ValueKind == JsonValueKind.Number ? v.GetUInt32() : 0;
             r.Party = j.TryGetProperty("party", out v) && v.ValueKind == JsonValueKind.Number ? v.GetUInt32() : 0;
+            r.Procedural = j.TryGetProperty("procedural", out v) && v.ValueKind == JsonValueKind.True;
             return r;
         }
 
@@ -83,6 +87,9 @@ namespace AGame.StructureBridge
 
         public double Ms;
         public List<object> Checks = new List<object>();
+
+        /// <summary><c>{file, name}</c> de la sustitución hecha a mano que se ha construido; null si es el plano del juego.</summary>
+        public object Override;
     }
 
     static class Builder
@@ -138,7 +145,20 @@ namespace AGame.StructureBridge
                     byte party = StructureRotation.RotateMask((byte)(req.Party & 15), r.Turns);
                     var inst = new StructureInstance(def.Kind, req.Seed, 0, 0, rs.x, rs.y, r.Foundation, r.Foundation,
                         r.Variant, req.Facing & 3, r.Style, party, damage, req.Dynamic);
+#if AGAME_OVERRIDES
+                    r.Build = StructureBlueprints.Build(inst, req.Procedural);
+                    // Las mismas condiciones que el enganche de CityBlueprints.Construct (ni kit de murallas, ni parque, ni
+                    // puerto; el palacio imperial siempre norteño).
+                    if (!req.Procedural && CityBlueprints.IsCity(def.Kind) && !FortKit.IsFort(def.Kind) &&
+                        def.Kind != StructureKind.Park && def.Kind != StructureKind.Harbour)
+                    {
+                        var style = def.Kind == StructureKind.ImperialPalace ? ArchStyle.Northern : r.Style;
+                        var o = AuthoredBlueprints.OverrideFor(def.Kind, style, r.Variant, r.Size, (byte)(req.Party & 15));
+                        if (o != null) r.Override = new { file = o.Source ?? "", name = o.Name };
+                    }
+#else
                     r.Build = StructureBlueprints.Build(inst);
+#endif
                     if (SchoolModules.IsSchool(def.Kind)) r.Theme = (int)SchoolModules.ElementOf(r.Variant);
                     break;
                 }
@@ -206,6 +226,7 @@ namespace AGame.StructureBridge
                     facing = (int)it.Facing,
                 }).ToArray(),
                 ["footprint"] = Footprint(r),
+                ["override"] = r.Override,
                 ["nav"] = new { levels = nav.Levels, cellsX = nav.CellsX, cellsZ = nav.CellsZ, dirs = Catalog.DirNames },
                 ["checks"] = r.Checks,
                 ["payload"] = new

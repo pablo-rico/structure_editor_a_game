@@ -21,7 +21,7 @@ namespace AGame.StructureBridge
 {
     static class Program
     {
-        public const int Protocol = 1;
+        public const int Protocol = 2;
 
         static readonly JsonSerializerOptions Compact = new JsonSerializerOptions
         {
@@ -109,6 +109,27 @@ namespace AGame.StructureBridge
                         case "validate":
                         {
                             var (header, bytes) = Builder.Encode(Authored.Validate(req, payload), withGrid: false);
+                            Write(output, id, header, bytes);
+                            break;
+                        }
+                        case "look":
+                            Write(output, id, Tools.LookJson(req));
+                            break;
+                        case "tools":
+                            Write(output, id, Tools.Catalog());
+                            break;
+                        case "tool":
+                        {
+                            var (header, bytes) = Builder.Encode(Tools.Apply(req, payload));
+                            Write(output, id, header, bytes);
+                            break;
+                        }
+                        case "furniture":
+                            Write(output, id, Furniture.List());
+                            break;
+                        case "stamp":
+                        {
+                            var (header, bytes) = Furniture.StampJson(req);
                             Write(output, id, header, bytes);
                             break;
                         }
@@ -272,6 +293,12 @@ namespace AGame.StructureBridge
             }
             foreach (var (ms, what) in slow.OrderByDescending(s => s.ms).Take(5))
                 Console.Error.WriteLine($"lenta: {ms:0} ms {what}");
+            // Herramientas y muebles del modo Editar (fase 3), sobre una casa del juego.
+            var toolWatch = Stopwatch.StartNew();
+            var editFailures = Tools.SelfTest(ToolSample).Concat(Furniture.SelfTest()).ToList();
+            foreach (var f in editFailures) o.WriteLine("FALLO " + f);
+            failed += editFailures.Count;
+            Console.Error.WriteLine($"herramientas y muebles: {toolWatch.Elapsed.TotalSeconds:0.0} s");
             o.WriteLine($"selftest: {total} construcciones, {failed} con fallos, {sw.Elapsed.TotalSeconds:0.0} s");
             return failed == 0 ? 0 : 1;
         }
@@ -306,6 +333,42 @@ namespace AGame.StructureBridge
                     if (max != min) yield return (Req(max.x, max.y), new[] { 3 });
                 }
             }
+        }
+
+        /// <summary>
+        /// Petición <c>tool</c> de muestra para el selftest: la herramienta <paramref name="tool"/> con sus valores por defecto
+        /// sobre una casa norteña de 6×6 del juego, con un objetivo que tiene sentido para ella.
+        /// </summary>
+        static (JsonElement header, byte[] payload) ToolSample(string tool)
+        {
+            var home = Builder.Run(Sample("Home", "Northern", 7, 6, 6, ("design", 0), ("rank", 2)), checks: false).Build;
+            int f0 = home.GroundLevel * 8, f1 = f0 + 16;
+            object target;
+            int floorY = f0;
+            switch (tool)
+            {
+                case "wall": target = new { rect = new[] { 0, 2, 4, 2 } }; break;
+                case "window": target = new { cell = new[] { 2, 0 }, dir = 3 }; floorY = f1; break;
+                case "door": target = new { cell = new[] { 1, 0 }, dir = 3 }; break;
+                case "stairs": target = new { cell = new[] { 0, 2 }, dir = 0 }; break;
+                case "chimney": target = new { cell = new[] { 0, 0 }, dir = 3 }; break;
+                case "roof":
+                case "crenels": target = new { rect = new[] { 0, 0, 5, 5 } }; floorY = f1; break;
+                case "spire": target = new { rect = new[] { 2, 2, 3, 3 } }; floorY = f1 + 16; break;
+                default: target = new { rect = new[] { 1, 1, 4, 4 } }; break;
+            }
+            var g = home.Grid;
+            var header = new
+            {
+                op = "tool", name = tool, target, floorY, style = "Northern",
+                size = new[] { g.SizeX, g.SizeY, g.SizeZ }, groundLevel = home.GroundLevel, bandStarts = home.BandStarts,
+                bandFloors = home.BandFloors, entrance = new[] { home.Entrance.x, home.Entrance.y }, courtyard = home.Courtyard,
+                parts = (home.Parts ?? Array.Empty<AGame.World.Structures.VoxelPart>()).Select(p => Json.PartJson(p, default)).ToArray(),
+                interactables = home.Interactables.Select(it => Json.ItemJson(it)).ToArray(),
+                hasDetail = g.RawDetail.Length > 0,
+            };
+            var payload = g.Raw.ToArray().Concat(g.RawDetail.ToArray()).ToArray();
+            return (JsonSerializer.SerializeToElement(header), payload);
         }
 
         /// <summary>El fragmento C# para <c>unity command eval</c> que calcula los mismos FNV-1a dentro de Unity.</summary>

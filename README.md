@@ -64,22 +64,47 @@ Para ver lo que generan los planos del juego.
 
 ## Editar
 
-Para hacer estructuras **únicas** a mano.
+Para hacer estructuras **únicas** a mano o retocar las del juego.
 
-- Empieza con *Archivo › Nueva estructura*, abriendo un `.agvox`, o con **«Duplicar para editar»** desde Explorar (lleva
-  lo que ves, sin girar e intacto, para retocarlo).
-- **Herramientas**: lápiz **B**, borrar **E**, caja **U**, línea **L**, relleno **G**, extruir cara **X**, cuentagotas
-  **I** (o Alt+clic), selección **M**, mover **V**. Pincel de 1, 2, 4 sub-cubos o una celda (**, .**), espejo en X y Z,
-  «Solo plano» para pintar a una altura (**↑/↓** la mueve) y «Detalle» para muebles y escaleras (el corte por planta no
-  los quita).
-- Con una selección: **Cmd+C / X / V / D** copiar, cortar, pegar y duplicar, **Shift+X / Z** espejo, **Cmd+R** girar.
-- **Paleta**: los materiales del juego por familias, con recientes y búsqueda. Los de color variable (tema de escuela,
-  color del reino) llevan una esquina partida; «Ver con» elige el tema con que se ven.
-- **Propiedades**: nombre, estilo, tamaño, la celda de la **puerta** (siempre en la fachada sur), las **plantas** (a qué
-  altura empieza cada una), las **partes móviles** (puertas con su bisagra, muros rompibles, rastrillos…; máximo 16) y
-  los **interactuables** (camas, sillas, cofres…). Las partes y los interactuables se crean desde una selección.
-- **Validación**: se comprueba sola mientras pintas, con las mismas reglas que el juego. **Deshacer** sin límite
-  (Cmd+Z), **Historial**, guardar con **Cmd+S**, y una copia de recuperación cada 2 minutos.
+- **Biblioteca** (pestaña junto a la Paleta):
+  - *Estructuras*: tus `.agvox` con miniatura, los recientes, «Nueva» e «Importar de MagicaVoxel…».
+  - *Del juego*: cualquier diseño del juego (tipo, estilo, diseño, tamaño, medianeras y semilla) para **copiarlo como
+    estructura nueva** o para **editar ese diseño del juego** (ver abajo).
+  - *Piezas*: los muebles del juego por categorías (cama, mesa, mostrador, altar…) y tus sellos.
+- **Planta de trabajo** (arriba del visor, `Todo | Baja | 1 | 2 | +`): corta la vista en esa planta y construyes sobre su
+  suelo. «+» añade una planta encima.
+- **Herramientas** (tira de la izquierda):
+  - *Básicas*: Lápiz **B**, Caja **U** (llena, hueca o solo paredes), Línea **L**, Relleno **G** (hasta esta planta o
+    toda), Extruir **X**, Cuentagotas **I** (o Alt+clic), Selección **M**, Mover **V**. Con los modos **Añadir (A)**,
+    **Pintar (N)** —cambia el material sin añadir ni quitar— y **Borrar (E)**. Pincel de 1, 2, 4 sub-cubos o una celda
+    (**, .**), espejo en X y Z, «Plano» (**K** lo pone en la cara señalada; **↑/↓** lo mueve) y «Detalle» (muebles y
+    escaleras).
+  - *Construir*, con los pinceles reales del juego: Habitación **H**, Muro **W**, Suelo **S**, Tejado **T**, Ventana,
+    Puerta, Escalera, Chimenea, Almenas, Cúpula y Aguja. Arrastra (o haz clic en un muro): ves el resultado antes de
+    soltar y se confirma al soltar, en un solo paso de deshacer. Los materiales salen del **Aspecto** (estilo, barrio y
+    clase) y puedes cambiar cada papel (muro, tejado, marcos…) con la Paleta.
+  - *Colocar*: el mueble o sello elegido en la Biblioteca va en la mano; clic donde va y **O** para girarlo.
+- Con una selección: **flechas** para moverla (Shift: una celda; Alt+↑↓: altura), **Cmd+C / X / V / D**, **Shift+X / Z**
+  espejo, **Cmd+R** girar, **Supr** vaciar y «Guardar como sello…» en Propiedades.
+- **Propiedades**: nombre, estilo, tamaño, la celda de la **puerta** (siempre en la fachada sur), las **plantas**, las
+  **partes móviles** (máximo 16) y los **interactuables**.
+- **Validación** en vivo con las reglas del juego, **deshacer** sin límite (Cmd+Z), **Historial**, **Cmd+S** y una copia
+  de recuperación cada 2 minutos. **Esc** cancela lo que estés haciendo.
+
+## Editar los diseños del juego
+
+En Explorar, **EDITAR ▾ › Editar este diseño del juego** (o Biblioteca › Del juego) carga un diseño de ciudad —por
+ejemplo el Ayuntamiento norteño, diseño 1, de 10×10— para retocarlo. Al exportarlo, **el juego usa tu versión en todas
+las ciudades donde ese diseño salga** con ese tamaño y medianeras; en Propiedades puedes acotarlo a un barrio, una clase
+o una altura. Mientras lo editas no se pueden cambiar el estilo, el tamaño ni la celda de la puerta (el juego los fija),
+las medianeras deben quedar sin huecos y tiendas y bancos necesitan mostrador. En Explorar verás «Diseño editado a mano»
+con un botón para **ver el original**. «Convertir en estructura propia» deja de sustituirlo.
+
+## MagicaVoxel
+
+*Importar de MagicaVoxel…* abre un `.vox` (hasta 256 por lado): eliges qué lado da a la calle y el material del juego
+para cada color (te propone el más parecido) y se abre como estructura nueva. *Exportar a MagicaVoxel…* (clic derecho en
+una estructura de la Biblioteca) guarda un `.vox` que vuelve exacto al importarlo.
 
 ## Llevar una estructura al juego
 

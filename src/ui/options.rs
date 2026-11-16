@@ -36,55 +36,7 @@ pub fn ui(ui: &mut Ui, cat: &Catalog, kind: &KindInfo, p: &mut Params, s: Option
         if !matches!(f.kind, FieldKind::Bool | FieldKind::Index { .. }) {
             section(ui, &f.label);
         }
-        changed |= match &f.kind {
-            FieldKind::Index { min, .. } => {
-                let max = params::field_max(&f.kind, &p.style);
-                widgets::stepper(ui, &f.label, v, *min, max)
-            }
-            FieldKind::Range { min, max } => {
-                ui.horizontal(|ui| {
-                    let r = ui.add(egui::Slider::new(v, *min..=*max).integer()).changed();
-                    ui.label(dim(format!("{min}–{max}")));
-                    r
-                })
-                .inner
-            }
-            FieldKind::Bool => {
-                let mut on = *v != 0;
-                ui.add_space(4.0);
-                let r = ui.checkbox(&mut on, &f.label).changed();
-                *v = on as i64;
-                r
-            }
-            FieldKind::Choice { options } if options.len() <= 4 => {
-                let opts: Vec<(i64, String)> = options.iter().map(|o| (o.value, o.label.clone())).collect();
-                widgets::segmented(ui, v, &opts)
-            }
-            FieldKind::Choice { options } => {
-                let before = *v;
-                let current = options.iter().find(|o| o.value == *v).map_or("—", |o| o.label.as_str());
-                egui::ComboBox::from_id_salt(&f.key).selected_text(current).show_ui(ui, |ui| {
-                    for o in options {
-                        ui.selectable_value(v, o.value, &o.label);
-                    }
-                });
-                *v != before
-            }
-            FieldKind::Mask { bits } => {
-                let mut changed = false;
-                ui.horizontal_wrapped(|ui| {
-                    for b in bits {
-                        let mut on = *v >> b.bit & 1 != 0;
-                        if ui.checkbox(&mut on, &b.label).changed() {
-                            *v ^= 1 << b.bit;
-                            changed = true;
-                        }
-                    }
-                });
-                changed
-            }
-            FieldKind::Element => element_grid(ui, cat, v),
-        };
+        changed |= field(ui, cat, f, v, &p.style);
     }
 
     if let Some(r) = kind.size {
@@ -149,6 +101,59 @@ pub fn ui(ui: &mut Ui, cat: &Catalog, kind: &KindInfo, p: &mut Params, s: Option
             });
     }
     changed
+}
+
+/// Control de un campo descrito por el generador (variantes de un tipo y parámetros de las herramientas de
+/// construcción). Devuelve true si cambió.
+pub fn field(ui: &mut Ui, cat: &Catalog, f: &crate::bridge::proto::Field, v: &mut i64, style: &str) -> bool {
+    match &f.kind {
+        FieldKind::Index { min, .. } => {
+            let max = params::field_max(&f.kind, style);
+            widgets::stepper(ui, &f.label, v, *min, max)
+        }
+        FieldKind::Range { min, max } => {
+            ui.horizontal(|ui| {
+                let r = ui.add(egui::Slider::new(v, *min..=*max).integer()).changed();
+                ui.label(dim(format!("{min}–{max}")));
+                r
+            })
+            .inner
+        }
+        FieldKind::Bool => {
+            let mut on = *v != 0;
+            let r = ui.checkbox(&mut on, &f.label).changed();
+            *v = on as i64;
+            r
+        }
+        FieldKind::Choice { options } if options.len() <= 4 => {
+            let opts: Vec<(i64, String)> = options.iter().map(|o| (o.value, o.label.clone())).collect();
+            widgets::segmented(ui, v, &opts)
+        }
+        FieldKind::Choice { options } => {
+            let before = *v;
+            let current = options.iter().find(|o| o.value == *v).map_or("—", |o| o.label.as_str());
+            egui::ComboBox::from_id_salt(&f.key).selected_text(current).show_ui(ui, |ui| {
+                for o in options {
+                    ui.selectable_value(v, o.value, &o.label);
+                }
+            });
+            *v != before
+        }
+        FieldKind::Mask { bits } => {
+            let mut changed = false;
+            ui.horizontal_wrapped(|ui| {
+                for b in bits {
+                    let mut on = *v >> b.bit & 1 != 0;
+                    if ui.checkbox(&mut on, &b.label).changed() {
+                        *v ^= 1 << b.bit;
+                        changed = true;
+                    }
+                }
+            });
+            changed
+        }
+        FieldKind::Element => element_grid(ui, cat, v),
+    }
 }
 
 /// Rejilla 7×2 de elementos con el color de su tema; el nombre en el tooltip y bajo la elegida.

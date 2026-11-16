@@ -52,7 +52,7 @@ la UI y la tabla material → etiqueta → familia (por *nombre*; un material de
 
 ## `hello`
 
-`{"id":1,"op":"hello"}` → `{"id":1,"ok":true,"protocol":1,"agameRoot":"…","unityVersion":"6000.3.28f1"}`. Los dos
+`{"id":1,"op":"hello"}` → `{"id":1,"ok":true,"protocol":2,"agameRoot":"…","unityVersion":"6000.3.28f1"}`. Los dos
 valores son los de la compilación (ruta absoluta de a_game y su versión de Unity).
 
 ## `catalog`
@@ -220,6 +220,147 @@ Respuesta (sin carga):
 puente (grupo `authored`, «Hechas a mano»: el tipo `Authored` con un campo `choice` `id` = sus nombres) cuando se vuelve
 a compilar el puente: tras exportar, el editor recompila y relanza el puente.
 
+## Edición fácil y diseños del juego (fase 3)
+
+Todo esto se añade sin romper lo anterior: campos opcionales y operaciones nuevas. `hello` sube a `protocol: 2`.
+`catalog` lleva además `"districts"` y `"tiers"` (`[{"name": "Residential", "label": "Residencial"}, …]`, nombres de
+`CityDistrict` y `DistrictTier` con las etiquetas del campo de variante de `Home`): son los nombres de `look` y de
+`replaces.district`/`tier`.
+
+Con un a_game sin las sustituciones (`AuthoredDef` sin `Replaces`) el puente compila sin ellas (constante
+`AGAME_OVERRIDES`, como `AGAME_AUTHORED`): `build` siempre da el plano del juego y `override: null`, y un `.agvox` con
+`replaces` no se exporta (`bad-replaces`). `look`, `tools`, `tool`, `furniture` y `stamp` funcionan con cualquier a_game.
+
+### `build`: original y sustituciones
+
+- Petición: `"procedural": true` construye el plano del juego **saltándose las sustituciones** (para ver o cargar el
+  original). Por defecto `false`: se ve lo que usa el juego. `party` (bits sin girar) también cuenta para encontrar la
+  sustitución.
+- Respuesta: `"override": {"file": "ArtSource/Structures/ayto.agvox", "name": "Ayuntamiento norteño"}` si lo construido
+  es una sustitución hecha a mano; `null` si es el plano procedural.
+- Solo se sustituyen edificios de ciudad que pasan por `CityBlueprints.Construct` hasta `DoorX`: **no** el kit de
+  murallas y castillo (`FortKit.IsFort`), el parque ni las piezas de puerto. El palacio imperial, siempre norteño.
+
+### `look`
+
+`{"op": "look", "style": "Northern", "district": "Residential", "tier": "Modest"}` → `{"roles": {…}}` con los papeles
+`wall`, `timber`, `plinth`, `quoin`, `roof`, `ridge`, `verge`, `frame`, `shutter`, `floor`, `leaf`, `trim`, `chimney` y
+`dome` (materiales por nombre de enum; `verge` puede ser `Air`: sin remate). Salen de los campos del estilo de las casas
+tras `DistrictLook.Apply(st, barrio, clase, 0)`; donde el estilo no tiene el papel, el material con el que lo pinta su
+plano:
+
+| Papel | Norteño (`HouseStyle`) | Mediterráneo (`MedStyle`) | Árabe (`PatioStyle`) |
+|---|---|---|---|
+| `wall` | `Infill` | `Wall` | `Wall` |
+| `timber` | `Timber` | `Leaf` | `Leaf` |
+| `plinth` | `Ground` | `Plinth` | `Plinth` |
+| `quoin`, `frame` | `Quoin`, `Timber` | `Trim` (o `Wall`) | `Trim` |
+| `roof`, `ridge`, `verge` | `RoofMat`, `Ridge`, `Verge` | `RoofMat`, `RoofMat`, `Air` | `Trim`, `Trim`, `Air` (azoteas) |
+| `shutter` | `Shutter` | `Shutter` | `Leaf` (celosía) |
+| `floor`, `leaf` | `Plank`, `Plank` | `Plank`, `Leaf` | `Plank`, `Leaf` |
+| `trim`, `chimney`, `dome` | `Quoin`, `ChimneyMat`, `Lead` | `DoorTrim`, `Wall`, `Terracotta` | `DoorTrim`, `Wall`, `DomeMat` |
+
+### `tools`
+
+`{"op": "tools"}` → `{"tools": [{"id": "room", "label": "Habitación", "icon": "HOUSE_LINE", "target": "rect",
+"params": [ /* campos con el esquema de los campos de variante */ ]}, …]}`. `icon` es el nombre de la constante de
+`egui_phosphor::regular`. `target`:
+
+| `target` | Gesto | Qué manda el editor |
+|---|---|---|
+| `rect` | arrastrar un rectángulo de celdas | `{"rect": [cx0, cz0, cx1, cz1]}` (celdas incluidas, en cualquier orden) |
+| `line` | arrastrar en línea recta | `{"rect": [...]}` de una celda de ancho |
+| `face` | clic en la cara de un muro | `{"cell": [cx, cz], "dir": i}` (`dirs` del contrato; `y` se puede mandar y no se usa) |
+| `cell` | clic en una celda (o arrastrar para la dirección) | `{"cell": [cx, cz], "dir": i}` |
+
+| Herramienta | `target` | Pincel del juego | Parámetros |
+|---|---|---|---|
+| `room` | `rect` | `FramedStorey`/`StoneStorey`/muro liso por planta en las 4 caras, suelo `Box` en F − 1, techo | `storeys` 1–4, `walls` (entramado, piedra, liso), `floor`, `ceiling` |
+| `wall` | `line` | lo mismo en una cara, en el borde sur/oeste o norte/este de las celdas | `storeys`, `walls`, `side` |
+| `floor` | `rect` | `Box` en F − 1 | `stone` (`plinth` en vez de `floor`), `edge` (hasta el borde) |
+| `roof` | `rect` | `Roof` con alero en el borde, `Gable` en los hastiales y cierre de muro hasta el faldón (como `CityHouse`) | `shape` (`RoofShape`), `pitch` 1–4, `gables`, `framed` |
+| `window` | `face` | `Window`, `ArchWindow`, `Slit`, `RoseWindow` | `kind`, `width` 2–6, `shutters`, `flowers`, `arch`, `stained` |
+| `door` | `face` | `Door` (arco rebajado) o `ArchedDoor`, hoja con `AddDoorLeaf` | `arch` (`ArchKind`), `leaf` |
+| `stairs` | `cell` | `CultureBrush.Stairs` (abre el hueco), un tramo por planta: el siguiente sale del rellano, una celda a un lado, de vuelta | `floors` 1–4, `turn`, `rail` |
+| `chimney` | `cell` | `Chimney` de 4×3 desde F hasta pasar lo más alto de encima | `above` 2–12 |
+| `crenels` | `rect` | `FortArt.CrenelRing` o `Crenels` en un lado (materiales de `FortStyle` del estilo) | `ring`, `side` |
+| `dome` | `rect` | `CultureBrush.Dome` inscrita en el rectángulo, con `Finial` | `rise` (100 media naranja, 130 peraltada, 70 rebajada), `ribs`, `finial` |
+| `spire` | `rect` | `SacredBrush.Spire` y `Cross` | `height` 8–96, `octagonal`, `edges`, `cross` |
+
+### `tool`
+
+Cabecera = la de `validate` (el documento entero: `size`, `groundLevel`, `bandStarts`, `bandFloors`, `entrance`,
+`courtyard`, `parts`, `interactables`, `hasDetail`, `replaces?`) más:
+
+```jsonc
+{"op": "tool", "name": "roof", "params": {"shape": 2, "pitch": 2}, "roles": {"roof": "RoofTile", "…": "…"},
+ "target": {"rect": [0, 0, 3, 2]}, "floorY": 8, "style": "Northern", "payloadLen": n}
+```
+
+Carga = rejilla (+ detalle). Respuesta = la de `build` **con la rejilla nueva completa** (`grid` y `detail` en
+`payload`) y las `parts`/`interactables` nuevas completas, más navegación y `checks` (como `validate`). El editor la
+enseña como vista previa y, al confirmar, guarda la diferencia como un paso de deshacer. Si no se puede, `ok: false` con
+`message` en español para artistas («Pon la ventana sobre un muro…», «Ya hay 16 partes móviles…», «Medianera: aquí no
+puede haber huecos…», «Arrastra en línea recta…», «La escalera no cabe…», «El rectángulo se sale de la estructura»).
+
+- `floorY` = altura (sub-cubos) donde se pisa en la planta de trabajo: la losa va en `floorY − 1` y la planta
+  siguiente en `floorY + 16`; el tejado y las almenas, la cúpula y la aguja van **sobre** esa planta (`floorY + 16` es lo
+  alto de sus muros). Por defecto, `groundLevel · 8`.
+- `roles` cambia papeles sueltos; los que faltan salen de `look(style, Residential, Modest)`. `style` (opcional; por
+  defecto el de `replaces` o `Northern`) da además los materiales de las almenas.
+- `params` como `fields` en `build`: lo que falta toma su `default`, lo que se sale se recorta.
+- Las herramientas pueden **crecer la rejilla hacia arriba** (en niveles enteros, hasta 63): `size` de la respuesta
+  manda. Las plantas nuevas (`room`/`wall` de varias plantas) añaden su franja (`bandStarts` = suelo − 1,
+  `bandFloors` = suelo / 8) si quedan por encima de la última.
+- `window` y `door` buscan el muro desde el borde `dir` de la celda hacia dentro, a la altura de la planta: la primera
+  capa sólida es su cara. Con `replaces`, no admiten huecos en un lado de `party` en el borde de la huella.
+- `door` a pie de calle en la fachada sur (`dir` 3, fila 0, `floorY` = suelo de la planta baja) pasa a ser la
+  **entrada** (`entrance` de la respuesta). Con la hoja, la parte nueva cuenta para `MaxParts`.
+- Las partes se pintan en su estado (`dynamic`, 0) como en el juego: una hoja nueva sale abierta.
+
+### `furniture` y `stamp`
+
+- `{"op": "furniture"}` → `{"categories": [{"key": "bedroom", "label": "Dormitorio"}, …], "pieces": [{"id": "Bed",
+  "label": "Cama", "category": "bedroom", "size": [u, v, y], "width": {"min": 4, "max": 6, "default": 5} | null,
+  "interacts": true}, …]}`. Categorías (claves fijas): `bedroom` (Dormitorio), `kitchen` (Cocina y taller), `shop`
+  (Tienda y banco), `church` (Iglesia), `jail` (Cárcel), `fields` (Campo y oficios), `school` (Escuela de magia),
+  `decor` (Decoración). 117 piezas de `VoxelFurniture`, `SacredFurniture`, `ZoneFurniture` y
+  `SchoolBlueprints.Furniture`. `size` = la pieza recortada mirando al norte (`u` = x, `v` = z).
+- `{"op": "stamp", "piece": "Bed", "facing": 3, "width": 5, "seed": 0}` (**`piece`**, no `id`: `id` es el de la
+  trama) → cabecera con `size`, `interactables`, `parts` (vacías), `anchor` `[x, y, z]` y `payload` con `grid` y `detail`
+  de la pieza recortada (sin navegación: `navFloors` y demás a 0). `facing` = `dirs` del contrato hacia donde mira el
+  mueble (la sala). `width` 0 o fuera de rango = el `default`. `seed` para las piezas con azar (colores, género).
+- La pieza se pinta como **detalle** (como los muebles del juego) con `Spot.At(origen, facing)` en una rejilla aparte y se
+  recorta por lo que no es aire. `anchor` = ese origen dentro de la pieza: la esquina del suelo en la que se apoya, con
+  `y` = el suelo donde se pisa (la capa de abajo, `y − 1`, es el forjado). La pieza se extiende desde él según `facing`:
+  norte (2) hacia +X y +Z, sur (3) hacia −X y −Z, este (0) hacia −Z y +X, oeste (1) hacia +Z y −X; las centradas en `u`
+  (trono, altar, escudo…) también hacia el otro lado. Puede caer fuera de la pieza: `anchor.y` negativo en las que
+  cuelgan del techo (araña, farol colgado: del forjado de una planta de 16) y mayor que 0 en las que van **en** la capa
+  del suelo (círculo y estrella de runas: sustituyen esa capa).
+
+### `validate` con `replaces`
+
+Si la cabecera trae `replaces` (ver `.agvox`), además, como `error`: `override-size` (la rejilla no mide `replaces.size`,
+o ese tamaño no está en el `SizeRange` del diseño), `override-door` (`entrance[0] != DoorX(kind, style, variant, size)`),
+`override-party` (vidrio o hueco en una medianera de `party`, como `CityBlueprintTests`; `at` = el primero),
+`override-counter` (Tienda de tipo `Store`/`Inn` o Banco sin mostrador: `VendorSpots.TryFind`), `override-courtyard`
+(patio donde el plano del juego no lo tiene) y `bad-replaces` (tipo que no es de ciudad, nombres que el juego no tiene).
+El `Variant` de las comprobaciones: el `design` con rango, barrio y clase (los `null`, corriente/residencial/modesta).
+
+### `export` con sustituciones
+
+Las fuentes con `replaces` se exportan como sustituciones (el juego las usa en `CityBlueprints.Construct` cuando
+encajan: mismo tipo, estilo, diseño, tamaño y medianeras, y rango/barrio/clase si no son `null`; gana la que fija más de
+los tres y, a igualdad, la de id menor; los templos árabes usan las mediterráneas). Además de las comprobaciones de
+`validate`: `duplicate-override` si dos fuentes sustituyen exactamente lo mismo y `override-style` si el `style` de la
+fuente no es el de `replaces`. Cada `.g.cs` lleva `source:` y, si sustituye, `replaces:`, `design:`, `party:` y los
+`rank:`/`district:`/`tier:` que fije (por nombre de enum).
+
+- **Clave de diseño** (`replaces.design`): en `Home` el campo `design` (`CityHouseVariant.Design`), en `Shop` el campo
+  `shop` (`ShopStyle`), en el resto el `Variant` en bruto, que en el catálogo es: el campo `design` (Ayuntamiento,
+  Cárcel, Puesto, templos), `prop` (mobiliario urbano), `oldGate`/`gateTower` (0/1: Pasaje, Puente de ciudad) y 0 en los
+  que no tienen campos. `replaces.rank` es el entero del rango (0–2; solo `Home`); `district`/`tier`, solo `Home` y `Shop`.
+
 ## `shutdown`
 
 `{"id":n,"op":"shutdown"}` → responde `ok` y sale.
@@ -259,7 +400,11 @@ Fuente de una estructura hecha a mano; vive en `a_game/ArtSource/Structures/<slu
   "detail": null,                       // o base64 del mismo RLE sobre 0/1
   "parts": [{"kind": "Door", "pattern": "Solid", "material": "Plank", "box": [..6], "swing": 1,
              "detail": true, "startsOpen": false, "locked": false}],
-  "interactables": [{"kind": "Bed", "box": [..6], "arg": 0, "facing": 0}]
+  "interactables": [{"kind": "Bed", "box": [..6], "arg": 0, "facing": 0}],
+  // Opcionales (fase 3):
+  "replaces": {"kind": "Home", "style": "Northern", "design": 2, "size": [5, 5], "party": 0,
+               "rank": null, "district": null, "tier": null},   // sustituye a ese diseño del juego (null = cualquiera)
+  "look": {"district": "Residential", "tier": "Modest", "roles": {"wall": "Plaster"}}  // Aspecto de las herramientas
 }
 ```
 
@@ -295,6 +440,9 @@ public static class AuthoredCasaDePrueba
         interactables: new VoxelInteractable[] { new VoxelInteractable(InteractKind.Bed, 29, 24, 3, 34, 29, 13,
             arg: 0, facing: 2) });
 }
+//     source: "ArtSource/Structures/casa-de-prueba.agvox",
+//     replaces: StructureKind.TownHall, design: 0, party: 0, rank: 1, district: CityDistrict.Noble, tier: DistrictTier.Rich
+//     (estos solo si sustituye; rank/district/tier, los que fije)
 // AuthoredCatalog.g.cs: public static readonly IReadOnlyList<AuthoredDef> All = new AuthoredDef[] { AuthoredCasaDePrueba.Def, … };
 ```
 

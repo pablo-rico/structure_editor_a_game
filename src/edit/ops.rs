@@ -22,6 +22,42 @@ pub fn cuboid(a: V, b: V) -> Vec<V> {
     out
 }
 
+/// Forma de la caja.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoxShape {
+    Solid,
+    /// Solo la cáscara.
+    Hollow,
+    /// Sin suelo ni techo.
+    Walls,
+}
+
+/// Caja con forma: llena, hueca (las seis caras) o solo paredes (las cuatro laterales).
+pub fn shaped_box(a: V, b: V, shape: BoxShape) -> Vec<V> {
+    let lo = [a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])];
+    let hi = [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])];
+    let side = |v: &V| v[0] == lo[0] || v[0] == hi[0] || v[2] == lo[2] || v[2] == hi[2];
+    cuboid(a, b)
+        .into_iter()
+        .filter(|v| match shape {
+            BoxShape::Solid => true,
+            BoxShape::Walls => side(v),
+            BoxShape::Hollow => side(v) || v[1] == lo[1] || v[1] == hi[1],
+        })
+        .collect()
+}
+
+/// Caja semiabierta `[x0, y0, z0, x1, y1, z1)` girada un cuarto de vuelta en una rejilla de fondo `size_z`, con la
+/// regla de `RotateQuarter`: `(x, z) → (size_z − 1 − z, x)`.
+pub fn rotate_box(b: [i32; 6], size_z: i32) -> [i32; 6] {
+    [size_z - b[5], b[1], b[0], size_z - b[2], b[4], b[3]]
+}
+
+/// Dirección (`dirs` = +X, −X, +Z, −Z) tras un cuarto de vuelta: +X→+Z, −X→−Z, +Z→−X, −Z→+X.
+pub fn rotate_dir(d: i32) -> i32 {
+    [2, 3, 1, 0][d.rem_euclid(4) as usize]
+}
+
 /// Línea 3D sin huecos (DDA entero, Bresenham en el eje dominante).
 pub fn line(a: V, b: V) -> Vec<V> {
     let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
@@ -41,9 +77,9 @@ pub fn brush(v: V, size: i32) -> Vec<V> {
     cuboid(lo, [lo[0] + size - 1, lo[1] + size - 1, lo[2] + size - 1])
 }
 
-/// Relleno 3D: sub-cubos del mismo material unidos por caras desde `start`; con `plane_y`, solo en esa altura.
-/// `limit` corta rellenos desbocados (el aire de fuera, por ejemplo).
-pub fn flood(grid: &VoxelGrid, start: V, plane_y: Option<i32>, limit: usize) -> Vec<V> {
+/// Relleno 3D: sub-cubos del mismo material unidos por caras desde `start`; con `ys` (alturas incluidas), solo dentro
+/// de esa franja (una planta). `limit` corta rellenos desbocados (el aire de fuera, por ejemplo).
+pub fn flood(grid: &VoxelGrid, start: V, ys: Option<(i32, i32)>, limit: usize) -> Vec<V> {
     if !grid.in_bounds(start[0], start[1], start[2]) {
         return Vec::new();
     }
@@ -58,7 +94,7 @@ pub fn flood(grid: &VoxelGrid, start: V, plane_y: Option<i32>, limit: usize) -> 
         }
         for d in DIRS {
             let n = [v[0] + d[0], v[1] + d[1], v[2] + d[2]];
-            if plane_y.is_some_and(|y| n[1] != y) || !grid.in_bounds(n[0], n[1], n[2]) {
+            if ys.is_some_and(|(lo, hi)| n[1] < lo || n[1] > hi) || !grid.in_bounds(n[0], n[1], n[2]) {
                 continue;
             }
             if grid.get(n[0], n[1], n[2]) == target && seen.insert(n) {
@@ -203,11 +239,26 @@ mod tests {
         }
         g.set(0, 0, 0, 2);
         assert_eq!(flood(&g, [1, 0, 1], None, 1000).len(), 15);
-        assert_eq!(flood(&g, [1, 1, 1], Some(1), 1000).len(), 16); // aire de la planta 1
+        assert_eq!(flood(&g, [1, 1, 1], Some((1, 1)), 1000).len(), 16); // aire de la planta 1
+        assert_eq!(flood(&g, [1, 1, 1], Some((1, 2)), 1000).len(), 32);
         let up = extrude(&g, [2, 0, 2], [0, 1, 0]);
         assert_eq!(up.len(), 15);
         assert!(up.iter().all(|v| v[1] == 1));
         assert!(extrude(&g, [2, 0, 2], [0, -1, 0]).is_empty()); // fuera de la rejilla
+    }
+
+    #[test]
+    fn cajas_con_forma_y_giros() {
+        assert_eq!(shaped_box([0, 0, 0], [2, 2, 2], BoxShape::Solid).len(), 27);
+        assert_eq!(shaped_box([0, 0, 0], [2, 2, 2], BoxShape::Hollow).len(), 26);
+        assert_eq!(shaped_box([0, 0, 0], [2, 2, 2], BoxShape::Walls).len(), 24);
+        // Una caja girada cuatro veces vuelve a su sitio (en una rejilla cuadrada).
+        let b = [1, 0, 2, 3, 4, 5];
+        assert_eq!((0..4).fold(b, |b, _| rotate_box(b, 8)), b);
+        // (x, z) = (1, 2) → (8 − 1 − 2, 1) = (5, 1): la caja [1,3)×[2,5) pasa a [3,6)×[1,3).
+        assert_eq!(rotate_box(b, 8), [3, 0, 1, 6, 4, 3]);
+        assert_eq!((0..4).fold(3, |d, _| rotate_dir(d)), 3);
+        assert_eq!(rotate_dir(0), 2);
     }
 
     #[test]

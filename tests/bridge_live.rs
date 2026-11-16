@@ -43,6 +43,7 @@ fn compila_lanza_y_construye() {
         damage: "Intact".into(),
         dynamic: 0,
         party: 0,
+        procedural: false,
     };
     p.request("build", serde_json::to_value(&req).unwrap(), &[]).unwrap();
     let f = wait(&p, 30);

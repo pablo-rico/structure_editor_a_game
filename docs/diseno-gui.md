@@ -302,3 +302,86 @@ cambios sin guardar.
 - Abrir la consola sola, bloquear el visor mientras recompila o dejar cerrar la pestaña Vista.
 - Mostrar nombres de enum.
 - Atajos pensados con teclado americano; resolver choques de atajos con modos (Q/R siempre giran la cámara).
+
+## 10. Edición fácil y diseños del juego (fase 3)
+
+Ampliación del agente de arte. Donde choque con lo anterior, manda esta sección (la tira de herramientas pasa a ser vertical; Borrar pasa de herramienta a modo; en Editar el selector de planta sustituye al ascensor).
+
+**Disposición de Editar:**
+- **tira de herramientas vertical y fija** a la izquierda de la Vista, en dos columnas de 30×28, con tres grupos: BÁSICAS (Lápiz, Caja, Línea, Relleno, Extruir, Cuentagotas, Selección, Mover), CONSTRUIR (Habitación, Muro, Suelo, Tejado, Ventana, Puerta, Escalera, Chimenea, Almenas, Cúpula, Aguja) y COLOCAR (Mueble, Sello);
+- **barra contextual** arriba del visor: `Planta [Todo|Baja|1|2|+]` y luego solo los parámetros de la herramienta activa, que pasan a otra línea si no caben;
+- **Biblioteca**: pestaña junto a la Paleta; solo se pone delante sola al entrar sin estructura o al elegir Mueble o Sello;
+- **Aspecto**: sección de Propiedades, primera y abierta con una herramienta de construcción, y un chip resumen en la barra.
+
+**Barra contextual por grupo:**
+- Básicas: Modo `[Añadir|Pintar|Borrar]`, Pincel, Espejo, Plano (`ARROWS_IN_LINE_VERTICAL`; `LOCK_SIMPLE` queda para los candados) y Detalle.
+- Caja añade `[Llena|Hueca|Solo paredes]` y Relleno `Hasta [Esta planta|Toda]`.
+- Construir: el chip de Aspecto y sus parámetros.
+- Colocar: nombre y tamaño, girar `[↺][↻]` y Detalle.
+
+**Herramientas de construcción:**
+
+| Herramienta | Icono | Gesto | Parámetros (valor por defecto) | Si no se puede |
+|---|---|---|---|---|
+| Habitación (H) | `HOUSE_LINE` | rectángulo | Plantas 1–6 (1), Suelos ☑ | «Se sale de la estructura» |
+| Muro (W) | `WALL` | línea | Plantas (1) | — |
+| Suelo (S) | `CHECKERBOARD` | rectángulo | — | — |
+| Tejado (T) | `TRIANGLE` | clic en una habitación o rectángulo | Forma: Dos aguas (caballete paralelo a la fachada), Dos aguas (hastial a la fachada), Cuatro aguas, Media cuatro aguas, Aguja, Un agua, Mansarda; Inclinación `[Suave\|Media\|Empinada]` | «No hay nada que cubrir» |
+| Ventana | `SQUARES_FOUR` | clic en un muro | Normal, Arco, Saetera o Rosetón; Contraventanas ☑; Jardinera ☐ | «Pon la ventana sobre un muro» / «Medianera: aquí no puede haber huecos» |
+| Puerta | `DOOR` | clic en un muro, a ras de suelo | Hoja, Bisagra, Empieza abierta, Con llave | «La puerta de este diseño está fija en la celda N» / «Ya hay 16 partes» |
+| Escalera | `STAIRS` | clic y arrastrar hacia donde sube | Hasta la planta N; Abrir hueco ☑ | «No hay planta encima: añade una con +» |
+| Chimenea | `FIRE_SIMPLE` | clic | — | — |
+| Almenas | `CASTLE_TURRET` | clic en lo alto de un muro | — | «Haz clic en lo alto de un muro» |
+| Cúpula | `MOSQUE` | cuadrado de 1 a 6 celdas | — | — |
+| Aguja | `CHURCH` | clic o hasta 3×3 | Altura Baja, Media o Alta | — |
+| Mueble / Sello | `COUCH` / `STAMP` | clic; la pieza sigue en la mano | Detalle ☑ | «No cabe: choca con un muro» |
+
+Detalles de la tabla:
+- Habitación y Muro crean las plantas que falten en el mismo paso.
+- La vista previa sale **opaca, con los materiales reales**, contorno dorado y la etiqueta «Habitación 4×3 celdas · 2 plantas — Suelta para construir · Esc cancela».
+- Mientras llega la siguiente vista previa se mantiene la última.
+
+**Atajos nuevos:**
+
+| Tecla | Acción |
+|---|---|
+| A / N / E | Modo Añadir / Pintar / Borrar. Con Selección, Mover o Cuentagotas, pasan a Lápiz |
+| H / W / S / T | Habitación / Muro / Suelo / Tejado |
+| K | Plano en la cara señalada; otra vez, lo suelta |
+| O / Shift+O | Girar lo que hay en la mano (mueble, sello, escalera, caballete) |
+| Flechas con algo seleccionado | Mover la selección 1 sub-cubo según la cámara; Shift = celda; Alt+↑↓ = altura |
+| Supr | Vaciar la selección |
+| Esc | Cancela el arrastre, luego suelta la pieza, luego quita la selección |
+
+**Biblioteca:**
+- buscador arriba y `[Estructuras | Del juego | Piezas]`;
+- tarjetas como las del Catálogo; la abierta lleva borde dorado;
+- placa cian `SWAP` y «Sustituye · diseño N»;
+- en «Del juego», dos botones a todo el ancho, cada uno con su línea de explicación;
+- estados vacíos con una sola acción.
+
+**Diseño del juego:**
+- **Aviso modal:** «Editar un diseño del juego. Vas a retocar *Ayuntamiento norteño, diseño 1 (10×10, medianera a la izquierda)*. Al exportarlo, el juego usará tu versión en todas las ciudades donde salga… No podrás cambiar el tamaño ni el sitio de la puerta; las medianeras deben quedar sin huecos; necesita mostrador.»
+- **Candados con su explicación:**
+  - Tamaño: «Este diseño ocupa 10×10 celdas en el juego. Para otro tamaño, usa *Copiar como estructura nueva*.»
+  - Puerta: «El juego pone la calle delante de esta celda. Puedes cambiar la hoja, no su sitio.»
+- Si falta el mostrador, error de Validación con el botón «Colocar mostrador».
+- **En Explorar**, aviso con barra cian: «✎ Diseño editado a mano: es el que usa el juego. [Ver el original] [Abrir en Editar]».
+
+**Importar `.vox`:** ventana modal de 680 pt con:
+- vista previa;
+- tamaño en sub-cubos, celdas y niveles;
+- Frente;
+- modelos;
+- una fila por color (muestra, sub-cubos, → material, ⚠ si ninguno se parece);
+- avisos de puerta y plantas;
+- botón «IMPORTAR COMO ESTRUCTURA NUEVA», desactivado si algún eje pasa de 256.
+
+**Qué NO hacer:**
+- tercera fila de botones o selector de grupo;
+- ascensor y selector de planta a la vez;
+- vista previa de construcción translúcida o con botón «Confirmar»;
+- jerga («X/Z», «Variant», «party»);
+- dorado en las insignias;
+- bloquear el visor mientras llega la vista previa;
+- volver de Borrar a Añadir sin avisar.

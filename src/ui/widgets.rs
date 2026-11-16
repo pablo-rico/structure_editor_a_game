@@ -27,6 +27,7 @@ pub fn segmented<T: PartialEq + Clone>(ui: &mut Ui, value: &mut T, options: &[(T
             let on = v == value;
             let text = RichText::new(label.as_str()).color(if on { theme::TITLE } else { theme::TEXT });
             let b = egui::Button::new(text)
+                .wrap_mode(egui::TextWrapMode::Extend)
                 .fill(if on { theme::HOLE } else { theme::STONE1 })
                 .stroke(Stroke::new(1.0, if on { theme::GOLD } else { theme::STONE0 }));
             if ui.add(b).clicked() && !on {
@@ -42,6 +43,7 @@ pub fn segmented<T: PartialEq + Clone>(ui: &mut Ui, value: &mut T, options: &[(T
 pub fn toggle(ui: &mut Ui, on: &mut bool, text: &str) -> Response {
     let t = RichText::new(text).color(if *on { theme::TITLE } else { theme::TEXT });
     let b = egui::Button::new(t)
+        .wrap_mode(egui::TextWrapMode::Extend)
         .fill(if *on { theme::HOLE } else { theme::STONE1 })
         .stroke(Stroke::new(1.0, if *on { theme::GOLD } else { theme::STONE0 }));
     let mut r = ui.add(b);

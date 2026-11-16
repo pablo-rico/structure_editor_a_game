@@ -192,13 +192,17 @@ namespace AGame.StructureBridge
         static FieldDef Design(StructureKind kind, string label = "Diseño") =>
             FieldDef.Index("design", label, s => CityBlueprints.Variants(kind, s) - 1, CityBlueprints.Variants(kind) - 1);
 
-        static FieldDef District() => FieldDef.Choice("district", "Barrio", 0, EnumOptions(
+        static readonly (long, string)[] DistrictOptions = EnumOptions(
             (CityDistrict.Residential, "Residencial"), (CityDistrict.Noble, "Noble"), (CityDistrict.Poor, "Arrabal"),
-            (CityDistrict.Market, "Mercado"), (CityDistrict.Artisan, "Artesano")));
+            (CityDistrict.Market, "Mercado"), (CityDistrict.Artisan, "Artesano"));
 
-        static FieldDef Tier() => FieldDef.Choice("tier", "Clase", (long)DistrictTier.Modest, EnumOptions(
+        static readonly (long, string)[] TierOptions = EnumOptions(
             (DistrictTier.Poor, "Pobre"), (DistrictTier.Modest, "Modesta"), (DistrictTier.WellOff, "Acomodada"),
-            (DistrictTier.Rich, "Rica")));
+            (DistrictTier.Rich, "Rica"));
+
+        static FieldDef District() => FieldDef.Choice("district", "Barrio", 0, DistrictOptions);
+
+        static FieldDef Tier() => FieldDef.Choice("tier", "Clase", (long)DistrictTier.Modest, TierOptions);
 
         static FieldDef Rise() => FieldDef.Range("rise", "Subida del paso de ronda (niveles)", 0, FortKit.MaxRise);
         static FieldDef Scaffold() => FieldDef.Bool("scaffold", "En obra (con andamios)");
@@ -456,7 +460,13 @@ namespace AGame.StructureBridge
                     Fields = new[]
                     {
                         FieldDef.Choice("id", "Estructura", AuthoredCatalog.All[0].Id,
+#if AGAME_OVERRIDES
+                            AuthoredCatalog.All.Select(a => ((long)a.Id, a.Replaces.HasValue
+                                ? $"{a.Name} (sustituye a {list.FirstOrDefault(d => d.Kind == a.Replaces)?.Label ?? a.Replaces.ToString()})"
+                                : a.Name)).ToArray()),
+#else
                             AuthoredCatalog.All.Select(a => ((long)a.Id, a.Name)).ToArray()),
+#endif
                     },
                     Pack = (f, s) => f["id"],
                     SizeRange = v => Fixed(AuthoredBlueprints.Find(v)?.Cells ?? Vector2Int.one),
@@ -491,6 +501,9 @@ namespace AGame.StructureBridge
                 teamMaterials = mats.Where(m => !StructurePalette.Color(m, -1, team).Equals(StructurePalette.Color(m)))
                     .Select(m => m.ToString()).ToArray(),
                 styles = AllStyles.Select(s => new { name = s.ToString(), label = StyleLabel(s) }).ToArray(),
+                // Nombres de barrio y clase (look, replaces): las etiquetas, las del campo de variante de la casa.
+                districts = DistrictOptions.Select(o => new { name = ((CityDistrict)o.Item1).ToString(), label = o.Item2 }).ToArray(),
+                tiers = TierOptions.Select(o => new { name = ((DistrictTier)o.Item1).ToString(), label = o.Item2 }).ToArray(),
                 facings = Enumerable.Range(0, 4).Select(d => new
                 {
                     value = d, label = DirLabels[d], turns = StructureRotation.QuarterTurns(d),
@@ -522,7 +535,7 @@ namespace AGame.StructureBridge
             };
         }
 
-        static Dictionary<string, object> FieldJson(FieldDef f, KindDef d)
+        internal static Dictionary<string, object> FieldJson(FieldDef f, KindDef d)
         {
             var j = new Dictionary<string, object> { ["key"] = f.Key, ["label"] = f.Label, ["type"] = f.Type, ["default"] = f.Default };
             switch (f.Type)
@@ -530,7 +543,7 @@ namespace AGame.StructureBridge
                 case "index":
                     j["min"] = f.Min;
                     j["max"] = f.Max;
-                    if (f.MaxForStyle != null)
+                    if (f.MaxForStyle != null && d != null)
                         j["maxByStyle"] = d.Styles.ToDictionary(s => s.ToString(), s => f.MaxForStyle(s));
                     break;
                 case "range":

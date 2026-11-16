@@ -144,6 +144,11 @@ pub struct Catalog {
     pub damages: Vec<Named>,
     pub groups: Vec<Group>,
     pub kinds: Vec<KindInfo>,
+    /// Barrios y clases (nombres de `CityDistrict`/`DistrictTier`) para el Aspecto y las sustituciones.
+    #[serde(default)]
+    pub districts: Vec<Named>,
+    #[serde(default)]
+    pub tiers: Vec<Named>,
 }
 
 impl Catalog {
@@ -172,6 +177,9 @@ pub struct BuildRequest {
     pub damage: String,
     pub dynamic: u32,
     pub party: u32,
+    /// Construir el plano del juego saltándose las sustituciones hechas a mano (ver el original).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub procedural: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -270,6 +278,89 @@ pub struct BuildHeader {
     #[serde(default)]
     pub checks: Vec<Check>,
     pub payload: PayloadLens,
+    /// Lo construido es una sustitución hecha a mano de este diseño del juego.
+    #[serde(default, rename = "override")]
+    pub override_by: Option<OverrideInfo>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OverrideInfo {
+    pub file: String,
+    pub name: String,
+}
+
+/// Herramienta de construcción del generador (`tools`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolInfo {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub icon: String,
+    /// `rect`, `line`, `face` o `cell`.
+    pub target: String,
+    #[serde(default)]
+    pub params: Vec<Field>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+pub struct WidthRange {
+    pub min: i32,
+    pub max: i32,
+    pub default: i32,
+}
+
+/// Mueble del juego (`furniture`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Piece {
+    pub id: String,
+    pub label: String,
+    pub category: String,
+    #[serde(default)]
+    pub size: [i32; 3],
+    #[serde(default)]
+    pub width: Option<WidthRange>,
+    #[serde(default)]
+    pub interacts: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct FurnitureCatalog {
+    pub categories: Vec<Group>,
+    pub pieces: Vec<Piece>,
+}
+
+/// Pieza recortada de `stamp`: rejilla, interactuables y el sub-cubo de apoyo.
+#[derive(Clone, Debug)]
+pub struct Stamp {
+    pub grid: VoxelGrid,
+    pub interactables: Vec<Interactable>,
+    pub anchor: [i32; 3],
+}
+
+/// Decodifica la respuesta de `stamp` (sin navegación).
+pub fn decode_stamp(h: &serde_json::Value, payload: &[u8]) -> Result<Stamp> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct H {
+        size: [i32; 3],
+        #[serde(default)]
+        interactables: Vec<Interactable>,
+        #[serde(default)]
+        anchor: [i32; 3],
+        payload: PayloadLens,
+    }
+    let h: H = serde_json::from_value(h.clone()).context("cabecera de stamp")?;
+    let n = (h.size[0] * h.size[1] * h.size[2]) as usize;
+    ensure!(h.payload.grid == n && payload.len() >= n + h.payload.detail, "pieza de tamaño inesperado");
+    let detail = (h.payload.detail == n).then(|| payload[n..2 * n].to_vec());
+    Ok(Stamp {
+        grid: VoxelGrid { size: h.size, data: payload[..n].to_vec(), detail },
+        interactables: h.interactables,
+        anchor: h.anchor,
+    })
 }
 
 fn u64s(bytes: &[u8]) -> Vec<u64> {
@@ -303,6 +394,7 @@ pub fn decode_build(h: BuildHeader, payload: &[u8], seed: i32, grid: Option<Voxe
             VoxelGrid { size: h.size, data: grid_b.to_vec(), detail }
         }
     };
+    let override_by = h.override_by.map(|o| o.name);
     let footprint = match &h.footprint {
         Some(b64) => Some(base64::engine::general_purpose::STANDARD.decode(b64).context("huella en base64")?),
         None => None,
@@ -329,6 +421,7 @@ pub fn decode_build(h: BuildHeader, payload: &[u8], seed: i32, grid: Option<Voxe
             edges: edges_b.to_vec(),
         },
         checks: h.checks,
+        override_by,
     })
 }
 

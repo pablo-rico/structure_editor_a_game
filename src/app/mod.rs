@@ -43,6 +43,7 @@ pub enum Tab {
     Properties,
     Validation,
     History,
+    Library,
 }
 
 impl Tab {
@@ -59,6 +60,7 @@ impl Tab {
             Tab::Properties => (icon::SLIDERS_HORIZONTAL, "Propiedades"),
             Tab::Validation => (icon::CHECK_CIRCLE, "Validación"),
             Tab::History => (icon::CLOCK_COUNTER_CLOCKWISE, "Historial"),
+            Tab::Library => (icon::BOOKS, "Biblioteca"),
         };
         format!("{glyph}  {text}")
     }
@@ -84,6 +86,12 @@ struct Settings {
     hints_done: bool,
     kind: String,
     params: HashMap<String, Params>,
+    /// Ficheros abiertos o guardados hace poco (Biblioteca › Recientes).
+    #[serde(default)]
+    recent: Vec<PathBuf>,
+    /// Asociación color → material de cada `.vox` importado (por nombre de fichero y de material).
+    #[serde(default)]
+    vox_maps: HashMap<String, std::collections::BTreeMap<u8, Option<String>>>,
 }
 
 /// Una estructura pedida al generador y lo que respondió (se conserva la última buena mientras llega otra).
@@ -161,6 +169,9 @@ struct Capture {
     path: PathBuf,
     kind: Option<String>,
     edit: bool,
+    /// Ajustes de Editar para la captura: `EDITOR_BIBLIOTECA` (estructuras|juego|piezas), `EDITOR_HERRAMIENTA`
+    /// (id de construcción, p. ej. `room`) y `EDITOR_VOX` (ruta de un .vox para el diálogo de importar).
+    setup: Option<(Option<String>, Option<String>, Option<PathBuf>)>,
     asked: bool,
     ready_at: Option<std::time::Instant>,
 }
@@ -203,11 +214,12 @@ struct State {
     /// Puntero del modo Editar ya resuelto a sub-cubos (del fotograma anterior) y dónde caería un sub-cubo nuevo.
     edit_pointer: crate::edit::tools::Pointer,
     edit_place: Option<[i32; 3]>,
-    /// Revisión del documento y tema subidos al visor de Editar (remallar solo si cambian).
-    edit_uploaded: u64,
+    /// Tema subido al visor de Editar (remallar solo si cambia).
     edit_theme: Option<usize>,
     /// Rect del visor dibujado en este fotograma (los toasts se anclan a él).
     view_rect: Option<egui::Rect>,
+    /// Editar de la fase 3: construcción, piezas, biblioteca, Aspecto.
+    ed: edit::EditUi,
 }
 
 fn default_dock() -> DockState<Tab> {
@@ -222,7 +234,7 @@ fn default_dock() -> DockState<Tab> {
 fn default_edit_dock() -> DockState<Tab> {
     let mut d = DockState::new(vec![Tab::View]);
     let s = d.main_surface_mut();
-    let [center, _] = s.split_left(NodeIndex::root(), 0.18, vec![Tab::Palette]);
+    let [center, _] = s.split_left(NodeIndex::root(), 0.2, vec![Tab::Palette, Tab::Library]);
     let [center, _] = s.split_right(center, 0.74, vec![Tab::Properties]);
     s.split_below(center, 0.8, vec![Tab::Validation, Tab::History, Tab::Console]);
     d
@@ -237,7 +249,8 @@ impl App {
         let settings: Settings = cc.storage.and_then(|s| eframe::get_value(s, "settings")).unwrap_or_default();
         let docks = [
             cc.storage.and_then(|s| eframe::get_value(s, "dock")).unwrap_or_else(default_dock),
-            cc.storage.and_then(|s| eframe::get_value(s, "dock_edit")).unwrap_or_else(default_edit_dock),
+            // `_v3`: la disposición de Editar cambió en la fase 3 (Biblioteca); la vieja no se reutiliza.
+            cc.storage.and_then(|s| eframe::get_value(s, "dock_edit_v3")).unwrap_or_else(default_edit_dock),
         ];
         let root = settings.agame_root.clone().unwrap_or_else(Paths::default_agame_root);
         render::set_agame_root(&root);
@@ -284,14 +297,15 @@ impl App {
             confirm: None,
             edit_pointer: Default::default(),
             edit_place: None,
-            edit_uploaded: u64::MAX,
             edit_theme: None,
             view_rect: None,
+            ed: edit::EditUi::default(),
         };
         let capture = std::env::var_os("EDITOR_CAPTURA").map(|p| Capture {
             path: p.into(),
             kind: std::env::var("EDITOR_TIPO").ok(),
             edit: std::env::var("EDITOR_MODO").is_ok_and(|m| m == "editar"),
+            setup: Some((std::env::var("EDITOR_BIBLIOTECA").ok(), std::env::var("EDITOR_HERRAMIENTA").ok(), std::env::var_os("EDITOR_VOX").map(PathBuf::from))),
             asked: false,
             ready_at: None,
         });
@@ -306,6 +320,14 @@ impl App {
         let shown = self.st.main.s.is_some() && !self.st.main.loading && c.kind.is_none();
         if shown && c.edit && self.st.mode == Mode::Explore {
             self.st.fork_main();
+        }
+        if shown
+            && c.edit
+            && self.st.mode == Mode::Edit
+            && !self.st.ed.tools_cat.is_empty()
+            && let Some((lib, tool, vox)) = c.setup.take()
+        {
+            self.st.capture_setup(lib, tool, vox);
         }
         if shown && c.ready_at.is_none() {
             c.ready_at = Some(std::time::Instant::now());
@@ -343,7 +365,8 @@ fn save_png(img: &egui::ColorImage, path: &std::path::Path) -> anyhow::Result<()
 impl State {
     fn rebuild_main(&mut self) {
         if self.catalog.is_some() {
-            let req = self.params.request();
+            let mut req = self.params.request();
+            req.procedural = self.ed.explore_original;
             self.main.ask(&mut self.host, Purpose::Main, req);
         }
     }
@@ -360,6 +383,7 @@ impl State {
         self.hover = None;
         self.pinned = false;
         self.view.cut_level = None;
+        self.ed.explore_original = false;
         self.rebuild_main();
     }
 
@@ -416,6 +440,11 @@ impl State {
                     Ok(s) => self.editor.on_validated(revision, s),
                     Err(e) => self.toasts.push(ToastKind::Error, format!("No se ha podido validar: {}", e.message), None),
                 },
+                Reply::Tools(t) => self.ed.tools_cat = t,
+                Reply::Furniture(c) => self.ed.furniture = Some(c),
+                Reply::Look(roles) => self.on_look(roles),
+                Reply::Tool(seq, result) => self.on_tool(seq, result),
+                Reply::Stamp(key, result) => self.on_stamp(ctx, key, result),
                 Reply::Exported(result) => {
                     self.editor.exporting = false;
                     match result {
@@ -487,6 +516,12 @@ impl State {
                     self.sheet.images[i] = img;
                 }
             }
+            Purpose::Library => {
+                if let Ok(s) = result {
+                    self.ed.library.game_thumb = self.picture(ctx, "biblioteca-juego", &s, [480, 360]);
+                    self.ed.library.game_s = Some(s);
+                }
+            }
             Purpose::Thumb(kind) => {
                 if let Ok(s) = result
                     && let Some(t) = self.picture(ctx, &format!("mini-{kind}"), &s, [208, 176])
@@ -518,8 +553,25 @@ impl State {
         let Some(s) = self.main.s.clone() else { return };
         let label = cat.kind(&self.params.kind).map_or(self.params.kind.clone(), |k| k.label.clone());
         self.editor.fork(&s, format!("{label} {}", self.params.seed), self.params.style.clone());
-        self.edit_view.frame(&s);
+        self.after_open();
+    }
+
+    /// «Editar este diseño del juego» desde Explorar: lo prepara en Biblioteca › Del juego (sin girar, intacto, sin
+    /// medianeras y siempre el original), donde se confirma con un clic.
+    fn edit_game_from_explore(&mut self) {
+        let Some(cat) = self.catalog.clone() else { return };
+        let mut p = self.params.clone();
+        p.facing = cat.facings.iter().find(|f| f.turns == 0).map_or(3, |f| f.value);
+        p.damage = cat.damages.first().map_or_else(|| "Intact".into(), |d| d.name.clone());
+        p.dynamic = 0;
+        self.ed.library.game = Some(p);
+        self.ed.library.game_party = 0;
+        self.ed.library.game_s = None;
+        self.ed.library.game_thumb = None;
+        self.ed.library.section = crate::ui::library::Section::Game;
         self.mode = Mode::Edit;
+        self.open_tab = Some(Tab::Library);
+        self.toasts.push(ToastKind::Info, "Revisa el diseño en la Biblioteca y pulsa «Editar este diseño del juego».", None);
     }
 
     fn sheet_params(&self, i: usize) -> Option<Params> {
@@ -620,7 +672,7 @@ impl State {
                 ui.menu_button("Ver", |ui| {
                     let tabs: &[Tab] = match self.mode {
                         Mode::Explore => &[Tab::Catalog, Tab::Sheet, Tab::Compare, Tab::Options, Tab::Inspector, Tab::Console],
-                        Mode::Edit => &[Tab::Palette, Tab::Properties, Tab::Validation, Tab::History, Tab::Console],
+                        Mode::Edit => &[Tab::Palette, Tab::Library, Tab::Properties, Tab::Validation, Tab::History, Tab::Console],
                     };
                     for t in tabs {
                         if ui.button(t.title()).clicked() {
@@ -686,14 +738,40 @@ impl State {
                 // De derecha a izquierda: la acción principal en la esquina, luego el resto y el chip.
                 match self.mode {
                     Mode::Explore => {
-                        let fork = ui
-                            .add_enabled_ui(self.main.s.is_some(), |ui| {
-                                widgets::primary(ui, &format!("{}  DUPLICAR PARA EDITAR", icon::COPY))
-                            })
-                            .inner;
-                        if fork.on_hover_text("Lleva esta estructura al modo Editar para retocarla a mano").clicked() {
-                            self.fork_main();
-                        }
+                        let edit = ui
+                            .add_enabled_ui(self.main.s.is_some(), |ui| widgets::primary(ui, &format!("{}  EDITAR {}", icon::PENCIL_SIMPLE, icon::CARET_DOWN)))
+                            .inner
+                            .on_hover_text("Llevar lo que ves al modo Editar");
+                        let city = self.catalog.as_ref().and_then(|c| c.kind(&self.params.kind)).is_some_and(|k| k.group == "city");
+                        // ¿Ya hay una sustitución de lo que se ve? Entonces la opción la abre.
+                        let key = crate::agvox::Replaces {
+                            kind: self.params.kind.clone(),
+                            style: self.params.style.clone(),
+                            design: crate::ui::library::design_field(&self.params.fields).map_or(0, |(_, v)| v),
+                            size: [self.params.width, self.params.depth],
+                            party: 0,
+                            ..Default::default()
+                        };
+                        let existing = self.ed.library.override_of(&key).map(|e| e.path.clone());
+                        egui::Popup::menu(&edit).show(|ui| {
+                            if ui.button(format!("{}  Copiar como estructura nueva", icon::COPY)).clicked() {
+                                self.fork_main();
+                            }
+                            ui.label(dim("Una estructura tuya, aparte. El juego no cambia."));
+                            ui.separator();
+                            let text = if existing.is_some() { "Abrir el diseño editado" } else { "Editar este diseño del juego" };
+                            if ui
+                                .add_enabled(city, egui::Button::new(format!("{}  {text}", icon::PENCIL_SIMPLE_LINE)))
+                                .on_disabled_hover_text("Solo los edificios de ciudad se pueden sustituir.")
+                                .clicked()
+                            {
+                                match existing.clone() {
+                                    Some(path) => self.ask_open_path(path),
+                                    None => self.edit_game_from_explore(),
+                                }
+                            }
+                            ui.label(dim("Tu versión sustituye a este diseño en todas las ciudades del juego."));
+                        });
                         if ui.button(format!("{}  Captura", icon::CAMERA)).on_hover_text("Guardar una imagen (Cmd+Shift+I)").clicked() {
                             self.capture_view();
                         }
@@ -770,8 +848,23 @@ impl State {
                     icon::ARROW_LEFT,
                     icon::ARROW_RIGHT
                 ),
-                Mode::Edit => self.editor.tools.tool.hint().to_string(),
+                Mode::Edit => match self.editor.tools.tool {
+                    crate::edit::tools::Tool::Build => self
+                        .ed
+                        .tools_cat
+                        .iter()
+                        .find(|t| t.id == self.editor.tools.build)
+                        .map_or(crate::edit::tools::Tool::Build.hint(), |t| edit::build_hint(&t.target))
+                        .to_string(),
+                    t => t.hint().to_string(),
+                },
             };
+            if self.mode == Mode::Edit && self.editor.tools.tool.uses_mode() {
+                let m = self.editor.tools.mode;
+                let c = if m == crate::edit::tools::Mode::Erase { theme::ERROR } else { theme::TEXT };
+                ui.label(RichText::new(m.status()).color(c).small());
+                ui.separator();
+            }
             ui.label(dim(hint));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let view = if self.mode == Mode::Edit { &self.edit_view } else { &self.view };
@@ -1131,6 +1224,7 @@ impl TabViewer for Tabs<'_> {
             Tab::Properties => edit::properties(ui, st),
             Tab::Validation => edit::validation(ui, st),
             Tab::History => edit::history(ui, st),
+            Tab::Library => edit::library(ui, st),
         }
     }
 }
@@ -1211,6 +1305,7 @@ impl eframe::App for App {
         self.st.command_palette(&ctx);
         self.st.help(&ctx);
         self.st.confirm_dialog(&ctx);
+        self.st.edit_dialogs(&ctx);
         self.tick_capture(&ctx);
     }
 
@@ -1218,7 +1313,7 @@ impl eframe::App for App {
         self.st.settings.params.insert(self.st.params.kind.clone(), self.st.params.clone());
         eframe::set_value(storage, "settings", &self.st.settings);
         eframe::set_value(storage, "dock", &self.docks[0]);
-        eframe::set_value(storage, "dock_edit", &self.docks[1]);
+        eframe::set_value(storage, "dock_edit_v3", &self.docks[1]);
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

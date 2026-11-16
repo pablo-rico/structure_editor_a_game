@@ -39,6 +39,8 @@
       a_game; hasta que entre, el puente compila sin ellas. Cuando esté en a_game, quita la condición y los #if.
     -->
     <DefineConstants Condition="Exists('$(GameScripts)Generation/WorldGen1/Structures/Authored/AuthoredDef.cs')">$(DefineConstants);AGAME_AUTHORED</DefineConstants>
+    <!-- shortcut: lo mismo con las sustituciones (fase 3: AuthoredDef.Replaces); quitarlo cuando estén en a_game. -->
+    <DefineConstants Condition="Exists('$(GameScripts)Generation/WorldGen1/Structures/Authored/AuthoredDef.cs') And $([System.IO.File]::ReadAllText('$(GameScripts)Generation/WorldGen1/Structures/Authored/AuthoredDef.cs').Contains('Replaces'))">$(DefineConstants);AGAME_OVERRIDES</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

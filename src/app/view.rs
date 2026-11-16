@@ -68,8 +68,9 @@ fn compass(ui: &mut Ui, view: &ViewState) {
     resp.on_hover_text("Norte (+Z). La puerta de los planos sin girar mira al sur.");
 }
 
-/// Controles flotantes encima del visor (capas, cámara, plantas, leyenda).
-pub(super) fn overlay(ui: &mut Ui, rect: Rect, view: &mut ViewState, s: &Structure) {
+/// Controles flotantes encima del visor (capas, cámara, plantas, leyenda). En Editar no va el ascensor de plantas:
+/// lo sustituye el selector de planta de trabajo de la barra contextual (§10).
+pub(super) fn overlay(ui: &mut Ui, rect: Rect, view: &mut ViewState, s: &Structure, edit: bool) {
     let m = 10.0;
     let (row, gap) = (ui.spacing().interact_size.y, ui.spacing().item_spacing.y);
     // Arriba a la izquierda: capas.
@@ -108,9 +109,10 @@ pub(super) fn overlay(ui: &mut Ui, rect: Rect, view: &mut ViewState, s: &Structu
         });
     });
     // Derecha: ascensor de plantas (corte y leyenda de franjas a la vez).
-    let floors = &s.band_floors;
+    let floors: &[i32] = if edit { &[] } else { &s.band_floors };
     let h = (floors.len() + 1) as f32 * (26.0 + gap) - gap + 8.0;
     let lift = Rect::from_min_size(egui::pos2(rect.right() - 140.0 - m, rect.center().y - h / 2.0), vec2(140.0, h));
+    if !edit {
     float(ui, lift, |ui| {
         ui.vertical(|ui| {
             let mut pick = |ui: &mut Ui, level: Option<i32>, text: String, tip: &str| {
@@ -129,6 +131,7 @@ pub(super) fn overlay(ui: &mut Ui, rect: Rect, view: &mut ViewState, s: &Structu
             }
         });
     });
+    }
     // Abajo a la izquierda: leyenda de las capas encendidas.
     let on: Vec<usize> = (0..8).filter(|&i| *layer_mut(&mut view.layers, i)).collect();
     if !on.is_empty() {
@@ -176,11 +179,47 @@ pub(super) fn explore(ui: &mut Ui, st: &mut State) {
     }
     let rect = response.rect;
     st.view_rect = Some(rect);
-    overlay(ui, rect, &mut st.view, &s);
+    overlay(ui, rect, &mut st.view, &s, false);
+    // Diseño editado a mano (§10): se ve el que usa el juego, con la opción de ver el original.
+    let notice = s.override_by.is_some() || st.ed.explore_original;
+    if notice {
+        let mut original = st.ed.explore_original;
+        let mut open = false;
+        // Centrado de verdad: un Area con pivote arriba-centro (el Frame encoge a su contenido).
+        egui::Area::new(egui::Id::new("aviso-editado")).pivot(Align2::CENTER_TOP).fixed_pos(egui::pos2(rect.center().x, rect.top() + 56.0)).show(ui.ctx(), |ui| {
+            egui::Frame::new().fill(theme::alpha(theme::STONE0, 0.94)).corner_radius(3.0).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (bar, _) = ui.allocate_exact_size(vec2(3.0, 22.0), Sense::hover());
+                    ui.painter().rect_filled(bar, 0.0, theme::CYAN);
+                    if original {
+                        ui.label(RichText::new("Ves el original; el juego usa el editado.").color(theme::TEXT));
+                        if ui.button("Ver el editado").clicked() {
+                            original = false;
+                        }
+                    } else {
+                        ui.label(RichText::new(format!("{} Diseño editado a mano: es el que usa el juego.", icon::PENCIL_SIMPLE_LINE)).color(theme::TEXT));
+                        if ui.button("Ver el original").clicked() {
+                            original = true;
+                        }
+                        open = ui.button("Abrir en Editar").clicked();
+                    }
+                });
+            });
+        });
+        if original != st.ed.explore_original {
+            st.ed.explore_original = original;
+            st.rebuild_main();
+        }
+        if open {
+            st.open_override_of_main();
+        }
+    }
+    // Los avisos de error van debajo del de diseño editado si están los dos.
+    let below = if notice { rect.translate(vec2(0.0, 44.0)) } else { rect };
     if let Some(e) = &st.main.error {
-        banner(ui, rect, format!("{}  {} · Ves la última versión buena.", icon::WARNING, e.message), theme::ERROR);
+        banner(ui, below, format!("{}  {} · Ves la última versión buena.", icon::WARNING, e.message), theme::ERROR);
     } else if matches!(st.host.status, crate::host::Status::Broken(_)) {
-        banner(ui, rect, format!("{}  El juego no compila. Ves la última versión buena.", icon::X_CIRCLE), theme::ERROR);
+        banner(ui, below, format!("{}  El juego no compila. Ves la última versión buena.", icon::X_CIRCLE), theme::ERROR);
     }
     if st.main.loading {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));

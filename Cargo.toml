@@ -1,6 +1,6 @@
 [package]
 name = "structure_editor_a_game"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Editor de estructuras de sub-cubos de a_game"
 
@@ -8,6 +8,7 @@ description = "Editor de estructuras de sub-cubos de a_game"
 anyhow = "1.0.104"
 base64 = "0.23.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
+dot_vox = "5.2"
 eframe = { version = "0.36", default-features = false, features = ["wgpu", "persistence", "default_fonts", "accesskit", "links", "x11", "wayland"] }
 egui-phosphor = "0.14"
 egui_dock = { version = "0.21", features = ["serde"] }

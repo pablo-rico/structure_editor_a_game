@@ -21,11 +21,13 @@ pub enum Purpose {
     Compare(usize),
     Sheet(usize),
     Thumb(String),
+    /// Vista previa de «Del juego» en la Biblioteca.
+    Library,
 }
 
 impl Purpose {
     fn urgent(&self) -> bool {
-        matches!(self, Purpose::Main | Purpose::Compare(_))
+        matches!(self, Purpose::Main | Purpose::Compare(_) | Purpose::Library)
     }
 }
 
@@ -55,6 +57,15 @@ pub enum Reply {
     Validated(u64, Result<Structure, ErrorInfo>),
     /// Resultado de `export` (cabecera tal cual: ficheros escritos y comprobaciones).
     Exported(Result<Value, ErrorInfo>),
+    /// Catálogos de la fase 3 (generadores viejos no los tienen: entonces no llegan).
+    Tools(Vec<proto::ToolInfo>),
+    Furniture(proto::FurnitureCatalog),
+    /// Papeles de material de un Aspecto (`look`).
+    Look(std::collections::BTreeMap<String, String>),
+    /// Resultado de una herramienta de construcción; `u64` = número de la vista previa.
+    Tool(u64, Result<std::sync::Arc<Structure>, ErrorInfo>),
+    /// Pieza de mueble (`stamp`); la clave es la de quien la pidió.
+    Stamp(String, Result<proto::Stamp, ErrorInfo>),
 }
 
 #[derive(Clone)]
@@ -64,6 +75,11 @@ enum Pending {
     Build(Purpose, BuildRequest),
     Validate(u64, Box<crate::model::VoxelGrid>),
     Export,
+    Tools,
+    Furniture,
+    Look,
+    Tool(u64),
+    Stamp(String),
 }
 
 pub struct LogLine {
@@ -93,6 +109,8 @@ pub struct Host {
     pub log: Vec<LogLine>,
     /// Sube con cada generador nuevo (caché de miniaturas).
     pub generation: u64,
+    /// Id de la última petición `tool` (las respuestas viejas se descartan).
+    latest_tool: u64,
     /// La compilación en curso es la del arranque.
     startup: bool,
 }
@@ -114,6 +132,7 @@ impl Host {
             changed_at: None,
             log: Vec::new(),
             generation: 0,
+            latest_tool: 0,
             startup: true,
         };
         host.start();
@@ -178,7 +197,13 @@ impl Host {
         let ctx = self.ctx.clone();
         match Process::spawn(&self.paths, move || ctx.request_repaint()) {
             Ok(mut p) => {
-                for (op, pending) in [("hello", Pending::Hello), ("catalog", Pending::Catalog)] {
+                let ops = [
+                    ("hello", Pending::Hello),
+                    ("catalog", Pending::Catalog),
+                    ("tools", Pending::Tools),
+                    ("furniture", Pending::Furniture),
+                ];
+                for (op, pending) in ops {
                     if let Ok(id) = p.request(op, json!({}), &[]) {
                         self.pending.insert(id, pending);
                     }
@@ -257,29 +282,49 @@ impl Host {
 
     /// Pide navegación y comprobaciones de una estructura hecha a mano (`validate`, docs/contrato.md).
     /// `revision` identifica la versión del documento: las respuestas viejas se descartan.
-    pub fn validate(&mut self, revision: u64, s: &Structure) {
+    pub fn validate(&mut self, revision: u64, s: &Structure, replaces: Option<&crate::agvox::Replaces>) {
         let Some(p) = self.process.as_mut() else { return };
-        let header = json!({
-            "size": s.grid.size,
-            "groundLevel": s.ground_level,
-            "bandStarts": s.band_starts,
-            "bandFloors": s.band_floors,
-            "entrance": s.entrance,
-            "courtyard": s.courtyard,
-            "parts": s.parts,
-            "interactables": s.interactables,
-            "hasDetail": s.grid.detail.is_some(),
-        });
-        let mut payload = s.grid.data.clone();
-        if let Some(d) = &s.grid.detail {
-            payload.extend_from_slice(d);
-        }
+        let (header, payload) = doc_request(s, replaces);
         match p.request("validate", header, &payload) {
             Ok(id) => {
-                self.latest.insert(Purpose::Main, id);
                 self.pending.insert(id, Pending::Validate(revision, Box::new(s.grid.clone())));
             }
             Err(e) => self.note(format!("No he podido pedir la validación: {e}"), true),
+        }
+    }
+
+    /// Aplica una herramienta de construcción al documento (`tool`). `extra` lleva `name`, `params`, `roles`,
+    /// `target` y `floorY`. La respuesta llega como `Reply::Tool(seq, …)`; las viejas se descartan.
+    pub fn tool(&mut self, seq: u64, s: &Structure, replaces: Option<&crate::agvox::Replaces>, extra: Value) {
+        let Some(p) = self.process.as_mut() else { return };
+        let (mut header, payload) = doc_request(s, replaces);
+        if let (Some(h), Value::Object(e)) = (header.as_object_mut(), extra) {
+            h.extend(e);
+        }
+        match p.request("tool", header, &payload) {
+            Ok(id) => {
+                self.latest_tool = id;
+                self.pending.insert(id, Pending::Tool(seq));
+            }
+            Err(e) => self.note(format!("No he podido pedir la herramienta: {e}"), true),
+        }
+    }
+
+    /// Papeles de material de un Aspecto.
+    pub fn look(&mut self, style: &str, district: &str, tier: &str) {
+        let Some(p) = self.process.as_mut() else { return };
+        if let Ok(id) = p.request("look", json!({ "style": style, "district": district, "tier": tier }), &[]) {
+            self.pending.insert(id, Pending::Look);
+        }
+    }
+
+    /// Pieza de mueble girada hacia `facing`.
+    pub fn stamp(&mut self, key: String, piece: &str, facing: i32, width: Option<i32>, seed: i32) {
+        let Some(p) = self.process.as_mut() else { return };
+        // `id` es el de la trama: el mueble va en `piece` (docs/contrato.md).
+        let body = json!({ "piece": piece, "facing": facing, "width": width, "seed": seed });
+        if let Ok(id) = p.request("stamp", body, &[]) {
+            self.pending.insert(id, Pending::Stamp(key));
         }
     }
 
@@ -419,6 +464,50 @@ impl Host {
                     None => Ok(frame.header),
                 }));
             }
+            Pending::Tools => match error {
+                // Un generador anterior a la fase 3 no tiene herramientas: no es un fallo.
+                Some(_) => {}
+                None => match serde_json::from_value::<Vec<proto::ToolInfo>>(frame.header["tools"].clone()) {
+                    Ok(t) => out.push(Reply::Tools(t)),
+                    Err(e) => self.note(format!("Catálogo de herramientas ilegible: {e}"), true),
+                },
+            },
+            Pending::Furniture => match error {
+                Some(_) => {}
+                None => match serde_json::from_value::<proto::FurnitureCatalog>(frame.header) {
+                    Ok(c) => out.push(Reply::Furniture(c)),
+                    Err(e) => self.note(format!("Catálogo de muebles ilegible: {e}"), true),
+                },
+            },
+            Pending::Look => {
+                if error.is_none()
+                    && let Ok(roles) = serde_json::from_value(frame.header["roles"].clone())
+                {
+                    out.push(Reply::Look(roles));
+                }
+            }
+            Pending::Tool(seq) => {
+                if frame.id != self.latest_tool {
+                    return; // hay una vista previa más nueva en camino
+                }
+                let result = match error {
+                    Some(e) => Err(e),
+                    None => serde_json::from_value::<BuildHeader>(frame.header)
+                        .map_err(|e| e.to_string())
+                        .and_then(|h| proto::decode_build(h, &frame.payload, 0, None).map_err(|e| e.to_string()))
+                        .map(std::sync::Arc::new)
+                        .map_err(|e| ErrorInfo { message: "El generador ha respondido algo que no entiendo.".into(), detail: e }),
+                };
+                out.push(Reply::Tool(seq, result));
+            }
+            Pending::Stamp(key) => {
+                let result = match error {
+                    Some(e) => Err(e),
+                    None => proto::decode_stamp(&frame.header, &frame.payload)
+                        .map_err(|e| ErrorInfo { message: "Pieza ilegible.".into(), detail: e.to_string() }),
+                };
+                out.push(Reply::Stamp(key, result));
+            }
             Pending::Build(purpose, req) => {
                 if purpose.urgent() && self.latest.get(&purpose) != Some(&frame.id) {
                     return; // hay una petición más nueva en camino
@@ -442,6 +531,29 @@ impl Host {
     pub fn compile_errors(&self) -> &[CompileError] {
         self.last_compile.as_ref().map_or(&[], |c| &c.errors)
     }
+}
+
+/// Cabecera y carga de un documento para `validate` y `tool` (docs/contrato.md).
+fn doc_request(s: &Structure, replaces: Option<&crate::agvox::Replaces>) -> (Value, Vec<u8>) {
+    let mut header = json!({
+        "size": s.grid.size,
+        "groundLevel": s.ground_level,
+        "bandStarts": s.band_starts,
+        "bandFloors": s.band_floors,
+        "entrance": s.entrance,
+        "courtyard": s.courtyard,
+        "parts": s.parts,
+        "interactables": s.interactables,
+        "hasDetail": s.grid.detail.is_some(),
+    });
+    if let Some(r) = replaces {
+        header["replaces"] = serde_json::to_value(r).unwrap_or(Value::Null);
+    }
+    let mut payload = s.grid.data.clone();
+    if let Some(d) = &s.grid.detail {
+        payload.extend_from_slice(d);
+    }
+    (header, payload)
 }
 
 #[cfg(test)]

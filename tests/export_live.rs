@@ -47,7 +47,7 @@ fn exportar_y_construir() {
     let (req, home) = proto::load_fixture(&fixtures, "home_northern").unwrap();
     let (mut p, cat) = start(&paths);
     let id = next_id(&dir, &cat.materials);
-    let meta = Meta { id: Some(id), name: "Prueba del editor".into(), style: req.style.clone() };
+    let meta = Meta { id: Some(id), name: "Prueba del editor".into(), style: req.style.clone(), ..Default::default() };
     let file = dir.join("prueba_del_editor.agvox");
     std::fs::write(&file, agvox::save(&meta, &home, &cat.materials).unwrap()).unwrap();
 
@@ -70,6 +70,7 @@ fn exportar_y_construir() {
             damage: "Intact".into(),
             dynamic: 0,
             party: 0,
+            procedural: false,
         };
         p2.request("build", serde_json::to_value(&build).unwrap(), &[]).unwrap();
         let f = wait(&p2);

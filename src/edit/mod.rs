@@ -33,6 +33,8 @@ enum Step {
     Extras(Box<Extras>, Box<Extras>),
     /// Cambio de tamaño u otra operación que rehace la rejilla entera.
     Grid(Box<VoxelGrid>, Box<VoxelGrid>),
+    /// Varios pasos que se deshacen juntos (lo que llega del generador: rejilla + partes + plantas).
+    Many(Vec<Step>),
 }
 
 impl Step {
@@ -41,6 +43,7 @@ impl Step {
             Step::Voxels(v) => v.len() * 8,
             Step::Extras(..) => 1024,
             Step::Grid(a, b) => a.data.len() * 2 + b.data.len() * 2,
+            Step::Many(steps) => steps.iter().map(Step::bytes).sum(),
         }
     }
 }
@@ -189,6 +192,43 @@ impl Doc {
         self.push(label.into(), Step::Grid(Box::new(before), Box::new(after)));
     }
 
+    /// Cambia la estructura por `result` (herramienta de construcción, mueble, sello, importación) en un solo paso:
+    /// sub-cubos (diferencia, o la rejilla entera si cambia de tamaño), partes, interactuables y plantas.
+    pub fn apply_external(&mut self, label: &str, result: &Structure) {
+        self.end_stroke();
+        let mut steps = Vec::new();
+        if result.grid.size == self.s.grid.size {
+            let (old, new) = (&self.s.grid, &result.grid);
+            let det = |g: &VoxelGrid, i: usize| g.detail.as_ref().map_or(0, |d| d[i]);
+            let diffs: Vec<_> = (0..old.data.len())
+                .filter(|&i| old.data[i] != new.data[i] || det(old, i) != det(new, i))
+                .map(|i| (i as u32, old.data[i], new.data[i], det(old, i), det(new, i)))
+                .collect();
+            if !diffs.is_empty() {
+                steps.push(Step::Voxels(diffs));
+            }
+        } else {
+            steps.push(Step::Grid(Box::new(self.s.grid.clone()), Box::new(result.grid.clone())));
+        }
+        let before = self.extras();
+        let after = Extras {
+            parts: result.parts.iter().map(|p| Part { cell: None, ..p.clone() }).collect(),
+            interactables: result.interactables.clone(),
+            band_starts: result.band_starts.clone(),
+            band_floors: result.band_floors.clone(),
+            ..before.clone()
+        };
+        if after != before {
+            steps.push(Step::Extras(Box::new(before), Box::new(after)));
+        }
+        if steps.is_empty() {
+            return;
+        }
+        let step = Step::Many(steps);
+        self.apply(&step, true);
+        self.push(label.into(), step);
+    }
+
     fn push(&mut self, label: String, step: Step) {
         self.undo.push((label, step));
         self.redo.clear();
@@ -213,6 +253,13 @@ impl Doc {
             }
             Step::Extras(before, after) => self.set_extras(if forward { after } else { before }),
             Step::Grid(before, after) => self.s.grid = (**if forward { after } else { before }).clone(),
+            Step::Many(steps) => {
+                if forward {
+                    steps.iter().for_each(|s| self.apply(s, true));
+                } else {
+                    steps.iter().rev().for_each(|s| self.apply(s, false));
+                }
+            }
         }
         self.unsaved = true;
         self.version += 1;
@@ -273,6 +320,31 @@ mod tests {
         assert!(!d.can_undo());
         d.redo();
         assert_eq!(d.s.grid.get(1, 1, 1), 4);
+    }
+
+    #[test]
+    fn cambio_externo_en_un_paso() {
+        let mut d = doc();
+        let mut r = d.s.clone();
+        r.grid.set(1, 1, 1, 5);
+        r.band_starts = vec![8];
+        r.band_floors = vec![1];
+        d.apply_external("Habitación", &r);
+        assert_eq!(d.s.grid.get(1, 1, 1), 5);
+        assert_eq!(d.s.band_floors, vec![1]);
+        // Otra que además crece en altura (rejilla nueva entera).
+        let mut taller = d.s.clone();
+        taller.grid = VoxelGrid::new([8, 16, 8]);
+        taller.grid.set(0, 15, 0, 2);
+        d.apply_external("Planta nueva", &taller);
+        assert_eq!(d.s.grid.size[1], 16);
+        assert_eq!(d.history().count(), 2);
+        d.undo();
+        assert_eq!(d.s.grid.size[1], 8);
+        assert_eq!(d.s.grid.get(1, 1, 1), 5);
+        d.undo();
+        assert_eq!(d.s.grid.get(1, 1, 1), 0);
+        assert!(d.s.band_floors.is_empty());
     }
 
     #[test]

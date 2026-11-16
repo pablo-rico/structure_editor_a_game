@@ -91,6 +91,7 @@ impl Params {
             damage: self.damage.clone(),
             dynamic: self.dynamic,
             party: 0,
+            procedural: false,
         }
     }
 }

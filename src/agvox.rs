@@ -18,6 +18,38 @@ pub struct Meta {
     pub id: Option<u32>,
     pub name: String,
     pub style: String,
+    /// Diseño del juego al que sustituye (docs/contrato.md, «`.agvox`»); `None` = estructura propia.
+    pub replaces: Option<Replaces>,
+    /// Aspecto de las herramientas de construcción.
+    pub look: Option<Look>,
+}
+
+/// Diseño procedural del juego que esta estructura sustituye. `rank`, `district` y `tier` a `None` = cualquiera.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Replaces {
+    pub kind: String,
+    pub style: String,
+    pub design: i64,
+    pub size: [i32; 2],
+    /// Lados medianeros sin girar (bit `i` = `dirs[i]`).
+    pub party: u32,
+    #[serde(default)]
+    pub rank: Option<i64>,
+    #[serde(default)]
+    pub district: Option<String>,
+    #[serde(default)]
+    pub tier: Option<String>,
+}
+
+/// Aspecto: barrio y clase de los que salen los materiales por papel, y los papeles cambiados a mano.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Look {
+    pub district: String,
+    pub tier: String,
+    #[serde(default)]
+    pub roles: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -38,6 +70,10 @@ struct File {
     detail: Option<String>,
     parts: Vec<Part>,
     interactables: Vec<Interactable>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    replaces: Option<Replaces>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    look: Option<Look>,
 }
 
 /// Tramos `(valor u8, largo u16 LE)`, largo 1–65535.
@@ -101,6 +137,8 @@ pub fn save(meta: &Meta, s: &Structure, materials: &[String]) -> Result<String> 
         detail: s.grid.detail.as_ref().filter(|d| d.iter().any(|&b| b != 0)).map(|d| STANDARD.encode(rle(d))),
         parts: s.parts.iter().map(|p| Part { cell: None, ..p.clone() }).collect(),
         interactables: s.interactables.clone(),
+        replaces: meta.replaces.clone(),
+        look: meta.look.clone(),
     };
     Ok(serde_json::to_string_pretty(&file)? + "\n")
 }
@@ -138,7 +176,7 @@ pub fn load(json: &str, materials: &[String]) -> Result<(Meta, Structure)> {
         interactables: f.interactables,
         ..Default::default()
     };
-    Ok((Meta { id: f.id, name: f.name, style: f.style }, s))
+    Ok((Meta { id: f.id, name: f.name, style: f.style, replaces: f.replaces, look: f.look }, s))
 }
 
 #[cfg(test)]
@@ -183,7 +221,21 @@ mod tests {
 
     #[test]
     fn ida_y_vuelta_da_los_mismos_bytes() {
-        let meta = Meta { id: Some(7), name: "Torre".into(), style: "Northern".into() };
+        let meta = Meta {
+            id: Some(7),
+            name: "Torre".into(),
+            style: "Northern".into(),
+            replaces: Some(Replaces {
+                kind: "TownHall".into(),
+                style: "Northern".into(),
+                design: 1,
+                size: [10, 10],
+                party: 0,
+                district: Some("Noble".into()),
+                ..Default::default()
+            }),
+            look: Some(Look { district: "Noble".into(), tier: "Rich".into(), roles: [("wall".into(), "Stone".into())].into() }),
+        };
         let json = save(&meta, &sample(), &names()).unwrap();
         let (m2, s2) = load(&json, &names()).unwrap();
         assert_eq!(m2, meta);

@@ -115,7 +115,7 @@ impl Editor {
             ..Default::default()
         };
         let style = cat.styles.first().map_or_else(String::new, |s| s.name.clone());
-        self.set_doc(Doc::new(Meta { id: None, name: "Estructura nueva".into(), style }, s, None));
+        self.set_doc(Doc::new(Meta { name: "Estructura nueva".into(), style, ..Default::default() }, s, None));
     }
 
     /// «Duplicar para editar»: parte de una estructura procedural (construida sin girar, intacta y con estado 0).
@@ -127,7 +127,7 @@ impl Editor {
         }
         // Las puertas interactuables las crea el juego a partir de cada parte `Door` (`VoxelGrid.AddPart`).
         copy.interactables.retain(|i| i.kind != "Door");
-        self.set_doc(Doc::new(Meta { id: None, name, style }, copy, None));
+        self.set_doc(Doc::new(Meta { name, style, ..Default::default() }, copy, None));
     }
 
     fn set_doc(&mut self, doc: Doc) {
@@ -203,7 +203,7 @@ impl Editor {
         {
             self.validated = self.revision;
             self.changed_at = None;
-            host.validate(self.revision, &doc.s);
+            host.validate(self.revision, &doc.s, doc.meta.replaces.as_ref());
         }
         if doc.unsaved && self.recovered_at.elapsed() >= RECOVER_EVERY {
             self.recovered_at = Instant::now();
@@ -260,7 +260,7 @@ mod tests {
         let mats: Vec<String> = vec!["Air".into(), "Stone".into()];
         assert_eq!(next_id(&dir, &mats), 1);
         let s = Structure { grid: VoxelGrid::new([8, 8, 8]), ..Default::default() };
-        let meta = Meta { id: Some(4), name: "a".into(), style: String::new() };
+        let meta = Meta { id: Some(4), name: "a".into(), ..Default::default() };
         std::fs::write(dir.join("a.agvox"), agvox::save(&meta, &s, &mats).unwrap()).unwrap();
         assert_eq!(next_id(&dir, &mats), 5);
         std::fs::remove_dir_all(&dir).unwrap();
