@@ -11,6 +11,7 @@ pub mod mesh;
 pub mod model;
 pub mod params;
 pub mod pick;
+pub mod platform;
 pub mod render;
 pub mod theme;
 pub mod ui;

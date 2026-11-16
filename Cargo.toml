@@ -2,12 +2,13 @@
 name = "structure_editor_a_game"
 version = "0.1.0"
 edition = "2024"
+description = "Editor de estructuras de sub-cubos de a_game"
 
 [dependencies]
 anyhow = "1.0.104"
 base64 = "0.23.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
-eframe = { version = "0.36", default-features = false, features = ["wgpu", "persistence", "default_fonts", "accesskit", "links"] }
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "persistence", "default_fonts", "accesskit", "links", "x11", "wayland"] }
 egui-phosphor = "0.14"
 egui_dock = { version = "0.21", features = ["serde"] }
 glam = "0.34.3"
@@ -25,3 +26,7 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 3
 debug = false
+
+# Versión publicada: sin símbolos de depuración (binario más pequeño).
+[profile.release]
+strip = true

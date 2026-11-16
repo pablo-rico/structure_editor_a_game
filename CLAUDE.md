@@ -56,6 +56,7 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
 - `src/agvox.rs`: formato `.agvox`. `src/edit/`: `Doc` (historial de diferencias dispersas por trazo, `version`),
   `ops` (formas, relleno, extruir, portapapeles con el giro de `RotateQuarter`), `tools` (máquina de estados de las
   herramientas). `src/editor.rs`: documento abierto, guardar/abrir, validación en vivo (300 ms), exportar, recuperación.
+- `src/platform.rs`: carpeta de datos y personal, mostrar en el explorador, procesos sin consola en Windows.
 - `src/app/`: `mod.rs` (estado, docks por modo, barra superior y de estado, primer arranque, Cmd+K, atajos), `view.rs`
   (Vista con controles flotantes, Muestrario, Comparar, captura), `edit.rs` (modo Editar). `src/ui/`: paneles y
   controles (`widgets.rs` tiene segmentado, paso a paso, conmutador, chip, toasts).
@@ -90,6 +91,22 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
 - **Paridad:** si tocas el mallado o el shader, `VoxelTone` usa aritmética u32 *wrapping* exacta a la del HLSL; los
   hashes de las 5 muestras (`selftest --hashes`) deben seguir iguales a los de Unity.
 - **Fixtures:** ~9 MB (`schooltower.bin` es 7,6 MB). No las rehagas sin motivo.
+
+## Publicar una versión
+
+- La versión es `version` de `Cargo.toml` (sale en el título y en *Ayuda* con `CARGO_PKG_VERSION`). Subirla y hacer
+  push a `main`/`master` lanza `.github/workflows/publicar.yml`: si no existe el tag `v<versión>`, pasa `cargo test
+  --locked` y publica tag y release con `.exe` (Windows), `.dmg` y `.app.zip` (macOS universal, firma ad hoc, sin
+  notarizar) y `.sh` autoextraíble (Linux, compilado en ubuntu-22.04 por la glibc). Necesita `Cargo.lock` y
+  `fixtures/` en el repo.
+- Empaquetado: `packaging/macos/bundle.sh <versión> <binario> <salida>` y `packaging/linux/make_sh.sh <versión>
+  <binario> <salida.sh>` (se pueden probar en local); notas de la release en `packaging/notas-release.md`.
+- Una versión publicada no tiene el repo: `Paths::new` usa `bridge/` del repo si existe (`CARGO_MANIFEST_DIR`) y si no
+  escribe las fuentes que lleva dentro (`BRIDGE_SOURCES`, `include_str!`) en `platform::data_dir()/bridge-<versión>` y
+  compila allí. **Un `.cs` nuevo en `bridge/src` hay que añadirlo a `BRIDGE_SOURCES`** (lo vigila un test). Lo que
+  cambia por sistema (carpetas, dotnet, Unity, consola de Windows) va en `src/platform.rs` y `bridge/mod.rs`.
+- Antes de tocar algo de Windows o Linux: `rustup target add x86_64-pc-windows-msvc x86_64-unknown-linux-gnu` y
+  `CARGO_TARGET_DIR=target-cross cargo clippy --release --target <target> -- -D warnings`.
 
 ## Tocar el lado del juego (a_game)
 

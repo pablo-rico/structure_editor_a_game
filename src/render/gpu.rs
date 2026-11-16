@@ -442,10 +442,22 @@ impl Shared {
     }
 }
 
-/// LUT de la paleta del estilo pixel 3D de a_game (tira 1024×32), de `AGAME_ROOT` o `../a_game`.
+/// Carpeta del juego elegida en la app (la LUT se lee de ahí al crear el primer visor).
+static AGAME_ROOT: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+/// Dice al visor dónde está a_game. shortcut: solo cuenta antes de crear el primer visor (la LUT se carga una vez);
+/// cambiar de carpeta pide reiniciar para ver la LUT nueva.
+pub fn set_agame_root(root: &std::path::Path) {
+    if let Ok(mut r) = AGAME_ROOT.lock() {
+        *r = Some(root.to_path_buf());
+    }
+}
+
+/// LUT de la paleta del estilo pixel 3D de a_game (tira 1024×32): de la carpeta elegida, `AGAME_ROOT` o `../a_game`.
 fn load_lut() -> Option<image::RgbaImage> {
     const LUT: &str = "Assets/_Game/Rendering/Resources/pixel3d_lut.png";
     let roots = [
+        AGAME_ROOT.lock().ok().and_then(|r| r.clone()),
         std::env::var_os("AGAME_ROOT").map(std::path::PathBuf::from),
         Some("../a_game".into()),
         Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../a_game")),

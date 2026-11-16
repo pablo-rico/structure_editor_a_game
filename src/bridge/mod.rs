@@ -10,7 +10,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::SystemTime;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 /// Rutas del juego y del puente.
@@ -20,9 +20,43 @@ pub struct Paths {
     pub editor_root: PathBuf,
 }
 
+/// Fuentes del puente dentro del binario: una versión publicada no trae el repo, así que las escribe en la carpeta de
+/// datos y las compila allí (`Paths::prepare`).
+const BRIDGE_SOURCES: [(&str, &str); 6] = [
+    ("bridge/AGame.StructureBridge.csproj", include_str!("../../bridge/AGame.StructureBridge.csproj")),
+    ("bridge/src/Program.cs", include_str!("../../bridge/src/Program.cs")),
+    ("bridge/src/Catalog.cs", include_str!("../../bridge/src/Catalog.cs")),
+    ("bridge/src/Builder.cs", include_str!("../../bridge/src/Builder.cs")),
+    ("bridge/src/Checks.cs", include_str!("../../bridge/src/Checks.cs")),
+    ("bridge/src/Authored.cs", include_str!("../../bridge/src/Authored.cs")),
+];
+
 impl Paths {
+    /// En desarrollo (hay checkout del repo) el puente se compila en `bridge/`; en una versión publicada, en la carpeta
+    /// de datos, por versión.
     pub fn new(agame_root: PathBuf) -> Self {
-        Self { agame_root, editor_root: PathBuf::from(env!("CARGO_MANIFEST_DIR")) }
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let editor_root = if repo.join("bridge/AGame.StructureBridge.csproj").is_file() {
+            repo
+        } else {
+            crate::platform::data_dir().join(format!("bridge-{}", env!("CARGO_PKG_VERSION")))
+        };
+        Self { agame_root, editor_root }
+    }
+
+    /// Escribe las fuentes del puente si faltan o son de otra versión (no toca un checkout del repo).
+    pub fn prepare(&self) -> std::io::Result<()> {
+        for (rel, text) in BRIDGE_SOURCES {
+            let path = self.editor_root.join(rel);
+            if std::fs::read_to_string(&path).is_ok_and(|t| t == text) {
+                continue;
+            }
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(&path, text)?;
+        }
+        Ok(())
     }
 
     /// Carpeta de a_game por defecto: `AGAME_ROOT` o `../a_game` junto al editor.
@@ -51,8 +85,12 @@ impl Paths {
         self.editor_root.join("bridge/bin/Release/net8.0/AGame.StructureBridge.dll")
     }
 
-    /// Carpeta con `UnityEngine.CoreModule.dll` para la versión de Unity del proyecto.
+    /// Carpeta con `UnityEngine.CoreModule.dll` para la versión de Unity del proyecto (Unity Hub en su sitio de cada
+    /// sistema, o `UNITY_MANAGED`).
     pub fn unity_managed(&self) -> Result<PathBuf> {
+        if let Some(dir) = std::env::var_os("UNITY_MANAGED").map(PathBuf::from) {
+            return Ok(dir);
+        }
         let text = std::fs::read_to_string(self.agame_root.join("ProjectSettings/ProjectVersion.txt"))
             .context("no encuentro ProjectSettings/ProjectVersion.txt")?;
         let version = text
@@ -60,23 +98,37 @@ impl Paths {
             .find_map(|l| l.strip_prefix("m_EditorVersion:"))
             .map(str::trim)
             .context("ProjectVersion.txt sin m_EditorVersion")?;
-        let dir = PathBuf::from(format!(
-            "/Applications/Unity/Hub/Editor/{version}/Unity.app/Contents/Resources/Scripting/Managed/UnityEngine"
-        ));
-        if !dir.join("UnityEngine.CoreModule.dll").is_file() {
-            bail!("No está instalado Unity {version} (lo pide el proyecto).");
-        }
-        Ok(dir)
+        let home = crate::platform::home_dir();
+        let candidates = [
+            PathBuf::from(format!(
+                "/Applications/Unity/Hub/Editor/{version}/Unity.app/Contents/Resources/Scripting/Managed/UnityEngine"
+            )),
+            PathBuf::from(format!(r"C:\Program Files\Unity\Hub\Editor\{version}\Editor\Data\Managed\UnityEngine")),
+            home.join(format!("Unity/Hub/Editor/{version}/Editor/Data/Managed/UnityEngine")),
+        ];
+        candidates
+            .into_iter()
+            .find(|d| d.join("UnityEngine.CoreModule.dll").is_file())
+            .with_context(|| format!("No está instalado Unity {version} (lo pide el proyecto)."))
     }
 }
 
 /// Ejecutable de dotnet: una app lanzada desde el Finder no hereda el PATH de la terminal.
 pub fn dotnet() -> Option<PathBuf> {
-    let known = ["/usr/local/share/dotnet/dotnet", "/opt/homebrew/bin/dotnet", "/usr/local/bin/dotnet"];
+    let exe = format!("dotnet{}", std::env::consts::EXE_SUFFIX);
+    let known = [
+        PathBuf::from("/usr/local/share/dotnet/dotnet"),
+        PathBuf::from("/opt/homebrew/bin/dotnet"),
+        PathBuf::from("/usr/local/bin/dotnet"),
+        PathBuf::from("/usr/share/dotnet/dotnet"),
+        PathBuf::from("/usr/lib/dotnet/dotnet"),
+        PathBuf::from(r"C:\Program Files\dotnet\dotnet.exe"),
+        crate::platform::home_dir().join(".dotnet").join(&exe),
+    ];
     std::env::var_os("PATH")
         .into_iter()
-        .flat_map(|p| std::env::split_paths(&p).map(|d| d.join("dotnet")).collect::<Vec<_>>())
-        .chain(known.iter().map(PathBuf::from))
+        .flat_map(|p| std::env::split_paths(&p).map(|d| d.join(&exe)).collect::<Vec<_>>())
+        .chain(known)
         .find(|p| p.is_file())
 }
 
@@ -130,8 +182,11 @@ pub fn compile(paths: &Paths) -> CompileOutcome {
         Ok(m) => m,
         Err(e) => return fail(e.to_string()),
     };
+    if let Err(e) = paths.prepare() {
+        return fail(format!("No he podido preparar el generador en {}: {e}", paths.editor_root.display()));
+    }
     let before = mtime(&paths.dll());
-    let out = Command::new(dotnet)
+    let out = crate::platform::no_console(&mut Command::new(dotnet))
         .arg("build")
         .arg(paths.csproj())
         .args(["-c", "Release", "-nologo", "-v", "q", "-clp:NoSummary"])
@@ -204,7 +259,7 @@ impl Process {
     /// Lanza `serve`. `wake` se llama al llegar cada evento (para pedir un repintado).
     pub fn spawn(paths: &Paths, wake: impl Fn() + Send + Clone + 'static) -> Result<Self> {
         let dotnet = dotnet().context("No encuentro dotnet: instala el SDK de .NET 8.")?;
-        let mut child = Command::new(dotnet)
+        let mut child = crate::platform::no_console(&mut Command::new(dotnet))
             .arg(paths.dll())
             .arg("serve")
             .env("AGAME_ROOT", &paths.agame_root)
@@ -303,6 +358,23 @@ mod tests {
         assert_eq!(e[0].code, "CS1002");
         assert_eq!(e[0].message, "; expected");
         assert_eq!(e[1].message, "The name 'x' does not exist");
+    }
+
+    #[test]
+    fn el_binario_lleva_todo_el_puente() {
+        // Un .cs nuevo en bridge/src que no esté en BRIDGE_SOURCES rompería la versión publicada.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("bridge/src");
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let rel = format!("bridge/src/{}", e.file_name().to_string_lossy());
+            if rel.ends_with(".cs") {
+                assert!(BRIDGE_SOURCES.iter().any(|(r, _)| *r == rel), "falta {rel} en BRIDGE_SOURCES");
+            }
+        }
+        let paths = Paths { agame_root: PathBuf::new(), editor_root: std::env::temp_dir().join(format!("puente-{}", std::process::id())) };
+        paths.prepare().unwrap();
+        assert!(paths.csproj().is_file());
+        paths.prepare().unwrap(); // la segunda vez no reescribe nada
+        std::fs::remove_dir_all(&paths.editor_root).unwrap();
     }
 
     #[test]

@@ -9,11 +9,27 @@ los copia ni los imita: lanza un **generador** (`bridge/`) que compila esos mism
 pide cada estructura. Lo que ves aquí es exactamente lo que construye el juego (comprobado byte a byte contra Unity), y
 si alguien cambia un plano en a_game, el editor recompila solo y enseña la versión nueva.
 
+## Descargas
+
+Cada versión publicada está en **Releases** del repositorio:
+
+| Sistema | Fichero |
+|---|---|
+| Windows (x64) | `Estructuras-<versión>-windows-x64.exe` (no está firmado: SmartScreen puede pedir «Ejecutar de todas formas») |
+| macOS (Apple Silicon e Intel) | `Estructuras-<versión>-macos.dmg` o `…-macos.app.zip` (no está notarizado: la primera vez, clic derecho › Abrir) |
+| Linux (x86_64) | `Estructuras-<versión>-linux-x64.sh`: `sh` lo descomprime y lo arranca; con `--instalar` lo añade al menú |
+
+La versión publicada lleva dentro las fuentes del generador: la primera vez las escribe en la carpeta de datos del
+editor (`~/Library/Application Support/structure_editor_a_game` en macOS, `%APPDATA%\structure_editor_a_game` en
+Windows, `~/.local/share/structure_editor_a_game` en Linux) y las compila allí con `dotnet`. La versión del editor sale
+en el título de la ventana y en *Ayuda*.
+
 ## Requisitos
 
-- **macOS** con Rust instalado con rustup (`~/.cargo/bin`) y el **SDK de .NET 8** (`dotnet`).
-- **Unity** en la versión del proyecto (la de `a_game/ProjectSettings/ProjectVersion.txt`) instalado desde Unity Hub, y
-  a_game **abierto en Unity al menos una vez** (el generador usa sus `Library/ScriptAssemblies`).
+- El **SDK de .NET 8** (`dotnet`) y, para compilar desde el código, Rust instalado con rustup (`~/.cargo/bin`).
+- **Unity** en la versión del proyecto (la de `a_game/ProjectSettings/ProjectVersion.txt`) instalado desde Unity Hub en
+  su sitio de siempre (o su carpeta `Managed/UnityEngine` en `UNITY_MANAGED`), y a_game **abierto en Unity al menos una
+  vez** (el generador usa sus `Library/ScriptAssemblies`).
 - La carpeta de a_game junto a este repo (`../a_game`) o la que elijas al arrancar.
 
 ## Arrancar
@@ -89,6 +105,13 @@ piezas abiertas (fuentes, puestos) todavía no se pueden exportar.
 | Chip «No compila (n)» | El código del juego tiene errores ahora mismo; sigues viendo la última versión buena. La consola (clic en el chip) tiene el detalle para programación. |
 | «Esta combinación ha fallado al generarse» | Un plano del juego falla con esos parámetros. El error completo está en la consola; en el Muestrario, clic derecho en la celda lo copia. |
 | Exportar da error | Hay errores en la validación de alguna estructura de `ArtSource/Structures`, o el a_game elegido no tiene la rama de estructuras a mano. |
+
+## Publicar una versión
+
+Sube `version` en `Cargo.toml` (por ejemplo `0.1.0` → `0.2.0`) y haz push a la rama principal. El workflow
+`.github/workflows/publicar.yml` ve que aún no existe el tag `v0.2.0`, pasa los tests, compila en Windows, macOS
+(binario universal) y Linux, y crea el tag y la release con los tres instaladores. Si la versión no cambia, no hace
+nada. También se puede lanzar a mano desde *Actions › Publicar versión*.
 
 ## Desarrollo
 

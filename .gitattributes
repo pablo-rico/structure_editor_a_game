@@ -1,0 +1,2 @@
+# Los scripts de empaquetado se ejecutan en macOS y Linux: siempre con fin de línea LF.
+*.sh text eol=lf

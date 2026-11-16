@@ -1,0 +1,149 @@
+# Publica una versión del editor cuando cambia `version` en Cargo.toml.
+#
+# En cada push a la rama principal que toque Cargo.toml se lee la versión; si aún no existe el tag `v<versión>`, se
+# pasan los tests, se compila en Windows, macOS (binario universal) y Linux, y se crea el tag y la release con:
+#   Estructuras-<versión>-windows-x64.exe, Estructuras-<versión>-macos.dmg, Estructuras-<versión>-macos.app.zip y
+#   Estructuras-<versión>-linux-x64.sh.
+# También se puede lanzar a mano (Actions › Publicar versión › Run workflow): solo publica si la versión es nueva.
+name: Publicar versión
+
+on:
+  push:
+    branches: [main, master]
+    paths: [Cargo.toml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publicar
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: ¿Versión nueva?
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      nueva: ${{ steps.v.outputs.nueva }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        name: Leer la versión y buscar su tag
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "nueva=false" >> "$GITHUB_OUTPUT"
+            echo "La versión $version ya está publicada (tag v$version): no se hace nada." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "nueva=true" >> "$GITHUB_OUTPUT"
+            echo "Versión nueva: $version." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  tests:
+    name: Tests
+    needs: version
+    if: needs.version.outputs.nueva == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias de Linux
+        run: sudo apt-get update && sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Los tests con el generador real (necesitan Unity y a_game) están ignorados; estos usan fixtures/.
+      - run: cargo test --locked
+
+  compilar:
+    name: Compilar (${{ matrix.nombre }})
+    needs: [version, tests]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - nombre: windows
+            os: windows-latest
+          - nombre: macos
+            os: macos-latest
+          - nombre: linux
+            os: ubuntu-22.04 # glibc 2.35: arranca en distribuciones de 2022 en adelante
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias de Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.nombre }}
+
+      - name: Windows (.exe)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo build --release --locked
+          mkdir -p dist
+          cp target/release/structure_editor_a_game.exe "dist/Estructuras-$VERSION-windows-x64.exe"
+
+      - name: macOS (.app y .dmg, Apple Silicon + Intel)
+        if: runner.os == 'macOS'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          mkdir -p dist
+          lipo -create -output universal \
+            target/aarch64-apple-darwin/release/structure_editor_a_game \
+            target/x86_64-apple-darwin/release/structure_editor_a_game
+          bash packaging/macos/bundle.sh "$VERSION" universal dist
+          rm -rf dist/Estructuras.app
+
+      - name: Linux (.sh)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --release --locked
+          mkdir -p dist
+          bash packaging/linux/make_sh.sh "$VERSION" target/release/structure_editor_a_game \
+            "dist/Estructuras-$VERSION-linux-x64.sh"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: estructuras-${{ matrix.nombre }}
+          path: dist/*
+          if-no-files-found: error
+
+  publicar:
+    name: Tag y release
+    needs: [version, compilar]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Crear el tag y la release
+        run: |
+          ls -la dist
+          sed "s/<versión>/$VERSION/g" packaging/notas-release.md > notas.md
+          gh release create "v$VERSION" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "Estructuras · a_game $VERSION" \
+            --notes-file notas.md \
+            --generate-notes

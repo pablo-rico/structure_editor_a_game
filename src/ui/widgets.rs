@@ -189,9 +189,9 @@ impl Toasts {
                                 ui.set_max_width(270.0);
                                 ui.add(egui::Label::new(&t.text).wrap());
                                 if let Some(path) = &t.reveal
-                                    && ui.link("Mostrar en Finder").clicked()
+                                    && ui.link(crate::platform::REVEAL_LABEL).clicked()
                                 {
-                                    let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+                                    crate::platform::reveal(path);
                                 }
                             });
                             if ui.small_button(icon::X).on_hover_text("Cerrar").clicked() {

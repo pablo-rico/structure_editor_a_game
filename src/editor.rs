@@ -91,8 +91,7 @@ pub fn next_id(dir: &Path, materials: &[String]) -> u32 {
 }
 
 fn recovery_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join("Library/Application Support/structure_editor_a_game/recuperacion.agvox"))
+    Some(crate::platform::data_dir().join("recuperacion.agvox"))
 }
 
 impl Editor {

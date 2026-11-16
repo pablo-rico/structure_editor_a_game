@@ -12,6 +12,8 @@
 mod gpu;
 mod overlay;
 
+pub use gpu::set_agame_root;
+
 use std::sync::Arc;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Vec2 as EVec2};

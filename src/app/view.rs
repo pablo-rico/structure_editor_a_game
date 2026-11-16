@@ -352,7 +352,7 @@ impl State {
         let view = ViewState { fit: true, scale: 3, highlight: None, gizmos: Vec::new(), ..self.view.clone() };
         let img = crate::render::render_image(&vp.rs, &s, &paint, &view, [1920, 1440]);
         let p = &self.params;
-        let dir = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default().join("Pictures/Estructuras");
+        let dir = crate::platform::home_dir().join("Pictures/Estructuras");
         let path = dir.join(format!("{}_{}_{}.png", p.kind, p.style, p.seed));
         match super::save_png(&img, &path) {
             Ok(()) => self.toasts.push(ToastKind::Ok, "Captura guardada", Some(path)),

@@ -240,6 +240,7 @@ impl App {
             cc.storage.and_then(|s| eframe::get_value(s, "dock_edit")).unwrap_or_else(default_edit_dock),
         ];
         let root = settings.agame_root.clone().unwrap_or_else(Paths::default_agame_root);
+        render::set_agame_root(&root);
         let host = Host::new(cc.egui_ctx.clone(), root);
         let viewports = cc.wgpu_render_state.clone().map(|rs| Viewports {
             main: Viewport::new(&rs),
@@ -647,6 +648,8 @@ impl State {
                         self.show_help = true;
                         ui.close();
                     }
+                    ui.separator();
+                    ui.label(dim(format!("Estructuras · a_game {}", env!("CARGO_PKG_VERSION"))));
                 });
             });
             ui.separator();
@@ -791,6 +794,7 @@ impl State {
             match Paths::check_agame(&dir) {
                 Ok(()) => {
                     self.settings.agame_root = Some(dir.clone());
+                    render::set_agame_root(&dir);
                     self.catalog = None;
                     self.titles = None;
                     self.host.set_root(dir);
