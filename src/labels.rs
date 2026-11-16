@@ -190,9 +190,86 @@ pub fn group_icon(key: &str) -> &'static str {
     }
 }
 
+/// Grupos de la Biblioteca › Modelos: los modelos de vóxeles del juego, según su carpeta bajo `Assets/_Game/Art`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ModelGroup {
+    Trees,
+    Nature,
+    Ruins,
+    Furniture,
+    Shrine,
+    Intro,
+    Book,
+    Other,
+}
+
+impl ModelGroup {
+    pub const ALL: [ModelGroup; 8] = [
+        ModelGroup::Trees,
+        ModelGroup::Nature,
+        ModelGroup::Ruins,
+        ModelGroup::Furniture,
+        ModelGroup::Shrine,
+        ModelGroup::Intro,
+        ModelGroup::Book,
+        ModelGroup::Other,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ModelGroup::Trees => "Árboles",
+            ModelGroup::Nature => "Naturaleza y objetos",
+            ModelGroup::Ruins => "Ruinas y caminos",
+            ModelGroup::Furniture => "Muebles y cofres",
+            ModelGroup::Shrine => "Pilar de llegada",
+            ModelGroup::Intro => "Intro",
+            ModelGroup::Book => "Libro de política",
+            ModelGroup::Other => "Otros",
+        }
+    }
+
+    /// Grupo de un modelo por su ruta relativa a la carpeta de arte del juego.
+    pub fn of(rel_path: &str) -> Self {
+        let p = rel_path.replace('\\', "/");
+        let name = p.rsplit('/').next().unwrap_or("");
+        match () {
+            _ if p.starts_with("Objects/Trees3D/") => ModelGroup::Trees,
+            _ if p.starts_with("Objects/Voxel/") => ModelGroup::Nature,
+            _ if p.starts_with("Objects/Decor/") => ModelGroup::Ruins,
+            _ if p.starts_with("Objects/Storage/") || p.starts_with("Objects/Furniture/") => ModelGroup::Furniture,
+            _ if p.starts_with("Objects/Lights/") => ModelGroup::Shrine,
+            _ if p.starts_with("Intro/") && name.starts_with("pbk_") => ModelGroup::Book,
+            _ if p.starts_with("Intro/") => ModelGroup::Intro,
+            _ => ModelGroup::Other,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grupos_de_modelos_por_carpeta() {
+        use ModelGroup::*;
+        for (path, group) in [
+            ("Objects/Trees3D/voxel/oak_1_model.json", Trees),
+            ("Objects/Trees3D/palm/palm_v1_trunk_model.json", Trees),
+            ("Objects/Voxel/cactus_model.json", Nature),
+            ("Objects/Decor/RuinBlock/ruin_block_0_model.json", Ruins),
+            ("Objects/Decor/StonePath/stone_path_3_model.json", Ruins),
+            ("Objects/Storage/Chest/chest_0_model.json", Furniture),
+            ("Objects/Furniture/SleepingBag/sleeping_bag_model.json", Furniture),
+            ("Objects/Lights/ArrivalShrine/arrival_shrine_model.json", Shrine),
+            ("Intro/Resources/Intro/Models/intro_army_model.json", Intro),
+            ("Intro/Resources/Intro/Models/pbk_table_model.json", Book),
+            ("Otra/cosa_model.json", Other),
+        ] {
+            assert_eq!(ModelGroup::of(path), group, "{path}");
+            assert_eq!(ModelGroup::of(&path.replace('/', "\\")), group, "{path} con barras de Windows");
+        }
+        assert!(ModelGroup::ALL.iter().all(|g| !g.label().is_empty()));
+    }
 
     #[test]
     fn etiquetas_y_familias() {

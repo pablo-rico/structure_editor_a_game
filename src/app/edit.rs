@@ -32,6 +32,21 @@ pub(super) enum Confirm {
     New,
     Open(PathBuf),
     Delete(PathBuf),
+    /// El modelo abierto ha cambiado en disco desde que se abrió: guardar lo pisaría.
+    Overwrite,
+}
+
+/// Con qué se pinta lo que se edita: la paleta del modelo o la del catálogo (con el tema de la Paleta).
+fn paint_of(doc: Option<&crate::edit::Doc>, cat: &Catalog, theme: Option<usize>) -> Paint {
+    match doc.and_then(|d| d.model.as_ref()) {
+        Some(m) => m.paint(),
+        None => Paint::new(cat, theme, None),
+    }
+}
+
+/// Un modelo de vóxeles del juego (y no un `.agvox`), por el nombre del fichero.
+fn is_model_path(path: &std::path::Path) -> bool {
+    path.extension().is_some_and(|e| e == "json")
 }
 
 /// Gesto de construcción (celdas en el suelo; `dir` para caras y escaleras; `y` del sub-cubo señalado).
@@ -246,9 +261,18 @@ impl State {
 
     fn open(&mut self, path: &std::path::Path) {
         let materials = self.materials();
-        match self.editor.open(path, &materials) {
+        let model = is_model_path(path);
+        let opened = if model { self.editor.open_model(path) } else { self.editor.open(path, &materials) };
+        match opened {
             Ok(()) => {
-                self.remember_recent(path);
+                if model {
+                    // Las herramientas de edificio no valen para un modelo.
+                    self.editor.tools.cancel();
+                    self.editor.tools.tool = Tool::Pencil;
+                    self.editor.palette.selected = 1;
+                } else {
+                    self.remember_recent(path);
+                }
                 self.after_open();
             }
             Err(e) => self.toasts.push(ToastKind::Error, format!("No se ha podido abrir: {e:#}"), None),
@@ -256,6 +280,49 @@ impl State {
     }
 
     pub(super) fn save(&mut self, as_new: bool) {
+        self.save_checked(as_new, false);
+    }
+
+    /// Guarda un modelo en su fichero del juego. `overwrite`: aunque haya cambiado en disco.
+    fn save_model(&mut self, as_new: bool, overwrite: bool) {
+        let Some(doc) = &self.editor.doc else { return };
+        let root = crate::editor::models_root(&self.host.paths.agame_root);
+        let target = if as_new || doc.path.is_none() {
+            let name = format!("{}_model.json", crate::editor::slug(&doc.meta.name));
+            let dir = doc.path.as_ref().and_then(|p| p.parent().map(PathBuf::from)).unwrap_or_else(|| root.join("Objects/Voxel"));
+            let Some(p) = rfd::FileDialog::new().add_filter("Modelo del juego", &["json"]).set_directory(&dir).set_file_name(name).save_file()
+            else {
+                return;
+            };
+            // El juego busca los modelos por su nombre: siempre `<nombre>_model.json`.
+            let file = p.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+            let stem = file.trim_end_matches(".json").trim_end_matches("_model");
+            Some(p.with_file_name(format!("{stem}_model.json")))
+        } else {
+            None
+        };
+        if target.is_none() && !overwrite && self.editor.changed_on_disk() {
+            self.confirm = Some(Confirm::Overwrite);
+            return;
+        }
+        match self.editor.save(target, &[]) {
+            Ok(p) => {
+                if let Some(doc) = self.editor.doc.as_mut() {
+                    let file = p.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                    doc.meta.name = file.trim_end_matches("_model.json").to_string();
+                }
+                self.ed.library.refresh(&self.host.paths.agame_root, &[], true);
+                let shown = p.strip_prefix(&self.host.paths.agame_root).unwrap_or(&p).display().to_string();
+                self.toasts.push(ToastKind::Ok, format!("Guardado en el juego: {shown}"), Some(p));
+            }
+            Err(e) => self.toasts.push(ToastKind::Error, format!("No se ha podido guardar: {e:#}"), None),
+        }
+    }
+
+    fn save_checked(&mut self, as_new: bool, overwrite: bool) {
+        if self.editor.doc.as_ref().is_some_and(|d| d.is_model()) {
+            return self.save_model(as_new, overwrite);
+        }
         let materials = self.materials();
         let Some(doc) = &self.editor.doc else { return };
         let target = if as_new || doc.path.is_none() {
@@ -297,6 +364,30 @@ impl State {
 
     pub(super) fn confirm_dialog(&mut self, ctx: &egui::Context) {
         let Some(what) = &self.confirm else { return };
+        if matches!(what, Confirm::Overwrite) {
+            let mut go = None;
+            egui::Modal::new(egui::Id::new("confirmar-pisar")).show(ctx, |ui| {
+                ui.set_width(420.0);
+                ui.label(RichText::new("Este modelo ha cambiado en disco").font(theme::semibold(18.0)).color(theme::TITLE));
+                ui.label("Alguien lo ha cambiado desde que lo abriste (un script de arte, git…). Si guardas, se pierde ese cambio.");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(RichText::new("Guardar igualmente").color(theme::TEXT)).fill(theme::DANGER_BG)).clicked() {
+                        go = Some(true);
+                    }
+                    if ui.button("Cancelar").clicked() {
+                        go = Some(false);
+                    }
+                });
+            });
+            if let Some(go) = go {
+                self.confirm = None;
+                if go {
+                    self.save_checked(false, true);
+                }
+            }
+            return;
+        }
         let delete = match what {
             Confirm::Delete(p) => Some(p.clone()),
             _ => None,
@@ -353,7 +444,7 @@ impl State {
                 let materials = self.materials();
                 self.ed.library.refresh(&self.host.paths.agame_root, &materials, true);
             }
-            None => {}
+            Some(Confirm::Overwrite) | None => {}
         }
     }
 
@@ -602,6 +693,7 @@ impl State {
             Action::EditGame => self.load_game(true),
             Action::Piece(id) => self.take_piece(&id, 3),
             Action::Stamp(p) => self.take_stamp(&p),
+            Action::OpenModel(p) => self.ask_open_path(p),
         }
     }
 
@@ -1003,9 +1095,13 @@ impl State {
             self.ed.library.section = match section.as_str() {
                 "juego" => library::Section::Game,
                 "piezas" => library::Section::Pieces,
+                "modelos" => library::Section::Models,
                 _ => library::Section::Structures,
             };
             self.open_tab = Some(Tab::Library);
+        }
+        if let Some(path) = std::env::var_os("EDITOR_MODELO") {
+            self.open(std::path::Path::new(&path));
         }
         if let Some(id) = tool {
             self.editor.tools.tool = Tool::Build;
@@ -1281,7 +1377,7 @@ fn viewport(ui: &mut Ui, st: &mut State, cat: &Catalog) {
         st.edit_theme = st.editor.palette.theme;
         let shown = if want.0 { st.ed.preview.clone().unwrap_or_else(|| s.clone()) } else { s.clone() };
         if let Some(vp) = st.viewports.as_mut() {
-            vp.edit.set_structure(shown, &Paint::new(cat, st.editor.palette.theme, None));
+            vp.edit.set_structure(shown, &paint_of(st.editor.doc.as_ref(), cat, st.editor.palette.theme));
         }
     }
     st.editor.tools.material = st.editor.palette.selected.max(1);
@@ -1448,7 +1544,7 @@ pub(super) fn library(ui: &mut Ui, st: &mut State) {
     let ctx = ui.ctx().clone();
     let rs = st.viewports.as_ref().map(|v| v.rs.clone());
     let mut budget = 2; // miniaturas por fotograma, para no trabar la interfaz
-    let mut thumb = |key: &str, s: &Structure| {
+    let mut thumb = |key: &str, s: &Structure, paint: Option<&Paint>| {
         if budget == 0 {
             ctx.request_repaint();
             return None;
@@ -1456,7 +1552,15 @@ pub(super) fn library(ui: &mut Ui, st: &mut State) {
         budget -= 1;
         let rs = rs.as_ref()?;
         let view = crate::render::ViewState { layers: crate::render::Layers::none(), ..Default::default() };
-        let img = crate::render::render_image(rs, s, &Paint::new(&cat, s.theme, None), &view, [208, 160]);
+        let own;
+        let paint = match paint {
+            Some(p) => p,
+            None => {
+                own = Paint::new(&cat, s.theme, None);
+                &own
+            }
+        };
+        let img = crate::render::render_image(rs, s, paint, &view, [208, 160]);
         Some(ctx.load_texture(key, img, egui::TextureOptions::LINEAR))
     };
     let recent = st.settings.recent.clone();

@@ -12,6 +12,8 @@ use egui_phosphor::regular as icon;
 use super::widgets::{self, dim, section};
 use crate::agvox::{self, Meta, Replaces};
 use crate::bridge::proto::{Catalog, FurnitureCatalog};
+use crate::labels::ModelGroup;
+use crate::mesh::Paint;
 use crate::model::{SUB, Structure};
 use crate::params::Params;
 use crate::theme;
@@ -21,6 +23,49 @@ pub enum Section {
     Structures,
     Game,
     Pieces,
+    /// Modelos de vóxeles del juego (árboles, objetos, intro…).
+    Models,
+}
+
+/// Un `_model.json` del juego. Se carga la primera vez que hace falta su miniatura.
+pub struct ModelEntry {
+    pub path: PathBuf,
+    /// Nombre del fichero sin `_model.json`.
+    pub name: String,
+    pub group: ModelGroup,
+    pub modified: SystemTime,
+    /// Lo cargado (con qué se pinta y si ya se retocó en el editor), o por qué no se puede abrir.
+    pub loaded: Option<Result<(Arc<Structure>, Paint, bool), String>>,
+}
+
+/// Los modelos que hay bajo `root` (la carpeta de arte del juego), por grupo y nombre. `old` es la lista anterior:
+/// lo ya cargado se conserva si el fichero no ha cambiado.
+pub fn scan_models(root: &Path, old: Vec<ModelEntry>) -> Vec<ModelEntry> {
+    fn walk(dir: &Path, out: &mut Vec<(PathBuf, SystemTime)>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = e.path();
+            let Ok(meta) = e.metadata() else { continue };
+            if meta.is_dir() {
+                walk(&path, out);
+            } else if path.file_name().is_some_and(|n| n.to_string_lossy().ends_with("_model.json")) {
+                out.push((path, meta.modified().unwrap_or(SystemTime::UNIX_EPOCH)));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(root, &mut files);
+    let mut old: HashMap<PathBuf, ModelEntry> = old.into_iter().map(|e| (e.path.clone(), e)).collect();
+    let mut out: Vec<ModelEntry> = files
+        .into_iter()
+        .map(|(path, modified)| {
+            let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().into_owned();
+            let file = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+            let loaded = old.remove(&path).filter(|o| o.modified == modified).and_then(|o| o.loaded);
+            ModelEntry { name: file.trim_end_matches("_model.json").to_string(), group: ModelGroup::of(&rel), path, modified, loaded }
+        })
+        .collect();
+    out.sort_by(|a, b| (a.group, a.name.to_lowercase()).cmp(&(b.group, b.name.to_lowercase())));
+    out
 }
 
 /// Un `.agvox` en disco (estructura propia o sello).
@@ -30,6 +75,9 @@ pub struct Entry {
     pub s: Arc<Structure>,
     pub modified: SystemTime,
 }
+
+/// Hace una miniatura con el visor: clave de textura, qué pintar y con qué paleta (`None` = la del catálogo).
+pub type Thumb<'a> = dyn FnMut(&str, &Structure, Option<&Paint>) -> Option<TextureHandle> + 'a;
 
 /// Lo que la Biblioteca pide a la app.
 pub enum Action {
@@ -44,6 +92,7 @@ pub enum Action {
     EditGame,
     Piece(String),
     Stamp(PathBuf),
+    OpenModel(PathBuf),
 }
 
 pub struct Library {
@@ -51,6 +100,7 @@ pub struct Library {
     pub search: String,
     pub entries: Vec<Entry>,
     pub stamps: Vec<Entry>,
+    pub models: Vec<ModelEntry>,
     scanned: Option<Instant>,
     pub thumbs: HashMap<String, TextureHandle>,
     /// «Del juego»: parámetros, medianeras y lo construido (original, sin sustituciones).
@@ -68,6 +118,7 @@ impl Default for Library {
             search: String::new(),
             entries: Vec::new(),
             stamps: Vec::new(),
+            models: Vec::new(),
             scanned: None,
             thumbs: HashMap::new(),
             game: None,
@@ -99,6 +150,34 @@ fn scan(dir: &Path, materials: &[String]) -> Vec<Entry> {
         .collect();
     out.sort_by_key(|e| e.meta.name.to_lowercase());
     out
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+
+    #[test]
+    fn lista_de_modelos_sin_cargarlos() {
+        let root = std::env::temp_dir().join(format!("modelos-lista-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (voxel, trees) = (root.join("Objects/Voxel"), root.join("Objects/Trees3D/voxel"));
+        std::fs::create_dir_all(&voxel).unwrap();
+        std::fs::create_dir_all(&trees).unwrap();
+        std::fs::write(voxel.join("roca_model.json"), "{}").unwrap();
+        std::fs::write(voxel.join("roca_model.json.meta"), "").unwrap();
+        std::fs::write(voxel.join("otra_cosa.json"), "{}").unwrap();
+        std::fs::write(trees.join("abeto_model.json"), "{}").unwrap();
+        let found = scan_models(&root, Vec::new());
+        let names: Vec<(&str, ModelGroup)> = found.iter().map(|e| (e.name.as_str(), e.group)).collect();
+        assert_eq!(names, [("abeto", ModelGroup::Trees), ("roca", ModelGroup::Nature)]);
+        assert!(found.iter().all(|e| e.loaded.is_none()), "se cargan al pedir la miniatura");
+        // Lo ya cargado se conserva mientras el fichero no cambie.
+        let mut found = found;
+        found[0].loaded = Some(Err("x".into()));
+        let again = scan_models(&root, found);
+        assert!(again[0].loaded.is_some() && again[1].loaded.is_none());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
 
 /// Clave de miniatura de un fichero: ruta + fecha (cambia al guardar).
@@ -138,6 +217,10 @@ impl Library {
         self.scanned = Some(Instant::now());
         self.entries = scan(&crate::editor::source_dir(agame_root), materials);
         self.stamps = scan(&stamps_dir(), materials);
+        // La carpeta de arte es grande: solo se recorre con la sección a la vista.
+        if self.section == Section::Models {
+            self.models = scan_models(&crate::editor::models_root(agame_root), std::mem::take(&mut self.models));
+        }
     }
 
     /// El `.agvox` que ya sustituye exactamente ese diseño (sea cual sea su alcance de barrio o clase).
@@ -157,7 +240,7 @@ impl Library {
         furniture: Option<&FurnitureCatalog>,
         recent: &[PathBuf],
         current: Option<&Path>,
-        thumb: &mut dyn FnMut(&str, &Structure) -> Option<TextureHandle>,
+        thumb: &mut Thumb,
     ) -> Option<Action> {
         let mut act = None;
         ui.add(egui::TextEdit::singleline(&mut self.search).hint_text(format!("{}  Buscar en la biblioteca", icon::MAGNIFYING_GLASS)));
@@ -165,15 +248,100 @@ impl Library {
         widgets::segmented(
             ui,
             &mut sec,
-            &[(Section::Structures, "Estructuras".into()), (Section::Game, "Del juego".into()), (Section::Pieces, "Piezas".into())],
+            &[
+                (Section::Structures, "Estructuras".into()),
+                (Section::Game, "Del juego".into()),
+                (Section::Pieces, "Piezas".into()),
+                (Section::Models, "Modelos".into()),
+            ],
         );
+        if sec != self.section {
+            self.scanned = None; // la sección nueva se lee ya
+        }
         self.section = sec;
         ui.separator();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.section {
             Section::Structures => act = self.structures(ui, cat, recent, current, thumb),
             Section::Game => act = self.game_section(ui, cat),
             Section::Pieces => act = self.pieces(ui, furniture, thumb),
+            Section::Models => act = self.models_section(ui, current, thumb),
         });
+        act
+    }
+
+    /// Los modelos de vóxeles del juego, por grupos. Cada uno se carga cuando su tarjeta entra en pantalla.
+    fn models_section(&mut self, ui: &mut Ui, current: Option<&Path>, thumb: &mut Thumb) -> Option<Action> {
+        let mut act = None;
+        if self.models.is_empty() {
+            ui.label(dim("No encuentro modelos en la carpeta del juego."));
+            return None;
+        }
+        let search = self.search.to_lowercase();
+        let mut any = false;
+        let mut loads = 2; // modelos leídos por fotograma, para no trabar la interfaz
+        for group in ModelGroup::ALL {
+            let shown: Vec<usize> = (0..self.models.len())
+                .filter(|&i| self.models[i].group == group && (search.is_empty() || self.models[i].name.to_lowercase().contains(&search)))
+                .collect();
+            if shown.is_empty() {
+                continue;
+            }
+            any = true;
+            section(ui, &format!("{} ({})", group.label(), shown.len()));
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                for i in shown {
+                    let e = &self.models[i];
+                    let t = e.modified.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+                    let key = format!("{}@{t}", e.path.display());
+                    let line = match &e.loaded {
+                        None => "…".to_string(),
+                        Some(Err(_)) => format!("{} No se puede abrir", icon::WARNING),
+                        Some(Ok((s, _, edited))) => {
+                            let [sx, sy, sz] = s.grid.size;
+                            format!("{sx}×{sy}×{sz}{}", if *edited { " · retocado" } else { "" })
+                        }
+                    };
+                    let r = card(ui, &e.name, &line, self.thumbs.get(&key), current == Some(e.path.as_path()), false);
+                    let visible = ui.is_rect_visible(r.rect);
+                    let r = match &e.loaded {
+                        Some(Err(why)) => r.on_hover_text(format!("Este modelo no se puede abrir: {why}")),
+                        Some(Ok((_, _, true))) => r.on_hover_text(format!("{} · retocado a mano en el editor", e.name)),
+                        _ => r.on_hover_text(&e.name),
+                    };
+                    if r.clicked() && !matches!(e.loaded, Some(Err(_))) {
+                        act = Some(Action::OpenModel(e.path.clone()));
+                    }
+                    r.context_menu(|ui| {
+                        if ui.button(format!("{} {}", icon::FOLDER_OPEN, crate::platform::REVEAL_LABEL)).clicked() {
+                            crate::platform::reveal(&e.path);
+                            ui.close();
+                        }
+                    });
+                    if !visible {
+                        continue;
+                    }
+                    if e.loaded.is_none() && loads > 0 {
+                        loads -= 1;
+                        let loaded = std::fs::read_to_string(&e.path)
+                            .map_err(anyhow::Error::from)
+                            .and_then(|t| crate::vmodel::load(&t))
+                            .map(|(m, s)| (Arc::new(s), m.paint(), m.edited()))
+                            .map_err(|err| format!("{err:#}"));
+                        self.models[i].loaded = Some(loaded);
+                        ui.ctx().request_repaint();
+                    } else if let Some(Ok((s, paint, _))) = &e.loaded
+                        && !self.thumbs.contains_key(&key)
+                        && let Some(t) = thumb(&key, s, Some(paint))
+                    {
+                        self.thumbs.insert(key, t);
+                    }
+                }
+            });
+        }
+        if !any {
+            ui.label(dim(format!("Nada con «{}»", self.search)));
+        }
         act
     }
 
@@ -187,7 +355,7 @@ impl Library {
         cat: &Catalog,
         recent: &[PathBuf],
         current: Option<&Path>,
-        thumb: &mut dyn FnMut(&str, &Structure) -> Option<TextureHandle>,
+        thumb: &mut Thumb,
     ) -> Option<Action> {
         let mut act = None;
         ui.horizontal(|ui| {
@@ -225,7 +393,7 @@ impl Library {
                 let e = &self.entries[i];
                 let key = thumb_key(e);
                 if !self.thumbs.contains_key(&key)
-                    && let Some(t) = thumb(&key, &e.s)
+                    && let Some(t) = thumb(&key, &e.s, None)
                 {
                     self.thumbs.insert(key.clone(), t);
                 }
@@ -394,7 +562,7 @@ impl Library {
         &mut self,
         ui: &mut Ui,
         furniture: Option<&FurnitureCatalog>,
-        thumb: &mut dyn FnMut(&str, &Structure) -> Option<TextureHandle>,
+        thumb: &mut Thumb,
     ) -> Option<Action> {
         let mut act = None;
         match furniture {
@@ -436,7 +604,7 @@ impl Library {
             for e in self.stamps.iter().filter(|e| self.search.is_empty() || e.meta.name.to_lowercase().contains(&self.search.to_lowercase())) {
                 let key = thumb_key(e);
                 if !self.thumbs.contains_key(&key)
-                    && let Some(t) = thumb(&key, &e.s)
+                    && let Some(t) = thumb(&key, &e.s, None)
                 {
                     self.thumbs.insert(key.clone(), t);
                 }
