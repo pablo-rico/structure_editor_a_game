@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 
@@ -15,6 +15,7 @@ use crate::host::Host;
 use crate::model::{SUB, Structure, VoxelGrid};
 use crate::ui::palette::Palette;
 use crate::ui::properties::Resize;
+use crate::vmodel::{self, Model};
 
 /// Espera tras el último cambio antes de pedir la validación (§ plan: 300 ms).
 const VALIDATE_AFTER: Duration = Duration::from_millis(300);
@@ -35,6 +36,8 @@ pub struct Editor {
     /// Lo último que se ha mandado a dibujar.
     pub shown: Option<(u64, Arc<Structure>)>,
     pub exporting: bool,
+    /// Modelos: fecha y tamaño del fichero al abrirlo o guardarlo (para saber si otro lo ha cambiado).
+    disk: Option<(SystemTime, u64)>,
 }
 
 impl Default for Editor {
@@ -51,6 +54,7 @@ impl Default for Editor {
             recovered_at: Instant::now(),
             shown: None,
             exporting: false,
+            disk: None,
         }
     }
 }
@@ -94,6 +98,42 @@ fn recovery_path() -> Option<PathBuf> {
     Some(crate::platform::data_dir().join("recuperacion.agvox"))
 }
 
+fn model_recovery_path() -> PathBuf {
+    crate::platform::data_dir().join("recuperacion_model.json")
+}
+
+/// Carpeta del juego donde viven los modelos de vóxeles (`*_model.json`), en subcarpetas.
+pub fn models_root(agame_root: &Path) -> PathBuf {
+    agame_root.join("Assets/_Game/Art")
+}
+
+fn disk_stamp(path: &Path) -> Option<(SystemTime, u64)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
+}
+
+/// `.meta` de Unity para un `_model.json` nuevo (los que ya existen no se tocan: el juego los enlaza por su GUID).
+fn unity_meta() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    // Dos hashes con semilla aleatoria del sistema: 128 bits sin añadir dependencias.
+    let part = || std::collections::hash_map::RandomState::new().build_hasher().finish();
+    format!(
+        "fileFormatVersion: 2\nguid: {:016x}{:016x}\nTextScriptImporter:\n  externalObjects: {{}}\n  userData: \n  assetBundleName: \n  assetBundleVariant: \n",
+        part(),
+        part()
+    )
+}
+
+/// Escribe `text` en `path` sin dejarlo a medias (temporal en la misma carpeta y renombrar).
+fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).with_context(|| format!("no puedo escribir {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("no puedo escribir {}", path.display()))
+}
+
 impl Editor {
     /// Documento nuevo: `w`×`d` celdas y `levels` niveles, con un forjado de cimientos de piedra en el nivel 0.
     pub fn new_doc(&mut self, cat: &Catalog, w: i32, d: i32, levels: i32) {
@@ -130,7 +170,32 @@ impl Editor {
         self.set_doc(Doc::new(Meta { name, style, ..Default::default() }, copy, None));
     }
 
+    /// Abre un modelo de vóxeles del juego. La copia de recuperación se abre sin ruta (hay que decir dónde guardarla).
+    pub fn open_model(&mut self, path: &Path) -> Result<()> {
+        let text = std::fs::read_to_string(path).with_context(|| format!("no puedo leer {}", path.display()))?;
+        let (model, s) = vmodel::load(&text)?;
+        let recovered = path == model_recovery_path();
+        self.set_doc(Doc::new_model(model, s, (!recovered).then(|| path.to_path_buf())));
+        self.disk = disk_stamp(path).filter(|_| !recovered);
+        Ok(())
+    }
+
+    /// Modelo nuevo y vacío; no tiene fichero hasta que se guarda.
+    pub fn new_model(&mut self, size: [i32; 3]) {
+        let (model, s) = Model::new(size);
+        self.set_doc(Doc::new_model(model, s, None));
+    }
+
+    /// El fichero del modelo abierto ya no es el que se abrió o guardó (un script de arte, git…).
+    pub fn changed_on_disk(&self) -> bool {
+        match self.doc.as_ref().filter(|d| d.is_model()).and_then(|d| d.path.as_ref()) {
+            Some(path) => self.disk.is_some() && disk_stamp(path) != self.disk,
+            None => false,
+        }
+    }
+
     fn set_doc(&mut self, doc: Doc) {
+        self.disk = None;
         self.seen_version = doc.version;
         self.doc = Some(doc);
         self.tools.selection = None;
@@ -149,6 +214,21 @@ impl Editor {
     pub fn save(&mut self, path: Option<PathBuf>, materials: &[String]) -> Result<PathBuf> {
         let doc = self.doc.as_mut().context("no hay nada abierto")?;
         let path = path.or_else(|| doc.path.clone()).context("elige dónde guardar")?;
+        if let Some(model) = doc.model.as_mut() {
+            // El fichero del juego es la fuente: guardar ya es llevarlo al juego.
+            let text = vmodel::save(model, &doc.s)?;
+            write_atomic(&path, &text)?;
+            let meta = PathBuf::from(format!("{}.meta", path.display()));
+            if !meta.exists() {
+                std::fs::write(&meta, unity_meta())?;
+            }
+            // La cabecera y el orden de las caras pasan a ser los de lo recién escrito.
+            model.sync(&text)?;
+            doc.path = Some(path.clone());
+            doc.unsaved = false;
+            self.disk = disk_stamp(&path);
+            return Ok(path);
+        }
         let text = agvox::save(&doc.meta, &doc.s, materials)?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -164,6 +244,7 @@ impl Editor {
     pub fn export(&mut self, host: &mut Host, materials: &[String]) -> Result<PathBuf> {
         let dir = source_dir(&host.paths.agame_root);
         let doc = self.doc.as_mut().context("no hay nada abierto")?;
+        anyhow::ensure!(!doc.is_model(), "los modelos se guardan directamente en el juego");
         if doc.meta.id.is_none() {
             let id = next_id(&dir, materials);
             doc.edit_extras("Asignar id", |e| e.meta.id = Some(id));
@@ -197,7 +278,9 @@ impl Editor {
             self.touch();
         }
         let Some(doc) = self.doc.as_ref() else { return };
-        if let Some(t) = self.changed_at
+        // Los modelos no tienen reglas de juego que validar: el generador no interviene.
+        if !doc.is_model()
+            && let Some(t) = self.changed_at
             && t.elapsed() >= VALIDATE_AFTER
             && self.validated != self.revision
         {
@@ -207,7 +290,11 @@ impl Editor {
         }
         if doc.unsaved && self.recovered_at.elapsed() >= RECOVER_EVERY {
             self.recovered_at = Instant::now();
-            if let (Some(path), Ok(text)) = (recovery_path(), agvox::save(&doc.meta, &doc.s, materials)) {
+            let copy = match &doc.model {
+                Some(m) => (Some(model_recovery_path()), vmodel::save(m, &doc.s)),
+                None => (recovery_path(), agvox::save(&doc.meta, &doc.s, materials)),
+            };
+            if let (Some(path), Ok(text)) = copy {
                 let _ = path.parent().map(std::fs::create_dir_all);
                 let _ = std::fs::write(path, text);
             }
@@ -238,7 +325,7 @@ impl Editor {
 
     /// Hay copia de recuperación de una sesión anterior.
     pub fn recovery_available() -> Option<PathBuf> {
-        recovery_path().filter(|p| p.is_file())
+        recovery_path().filter(|p| p.is_file()).or_else(|| Some(model_recovery_path()).filter(|p| p.is_file()))
     }
 }
 
@@ -251,6 +338,91 @@ mod tests {
         assert_eq!(slug("Torre del Puerto"), "torre_del_puerto");
         assert_eq!(slug("Señal ¡Única!"), "senal_unica");
         assert_eq!(slug("  "), "estructura");
+    }
+
+    /// Carpeta temporal con una copia del cofre y su `.meta`.
+    fn chest_dir(name: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("modelos-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("chest_0_model.json");
+        std::fs::write(&path, crate::vmodel::tests::lf(crate::vmodel::tests::CHEST)).unwrap();
+        std::fs::write(dir.join("chest_0_model.json.meta"), "guid: del-juego\n").unwrap();
+        (dir, path)
+    }
+
+    fn solids(s: &Structure) -> usize {
+        s.grid.data.iter().filter(|&&b| b != 0).count()
+    }
+
+    #[test]
+    fn guardar_modelo_escribe_en_su_sitio() {
+        let (dir, path) = chest_dir("guardar");
+        let mut ed = Editor::default();
+        ed.open_model(&path).unwrap();
+        let doc = ed.doc.as_mut().unwrap();
+        assert_eq!(doc.meta.name, "chest_0");
+        let n = solids(&doc.s);
+        let i = doc.s.grid.data.iter().position(|&b| b != 0).unwrap() as i32;
+        let [sx, _, sz] = doc.s.grid.size;
+        doc.paint(i % sx, i / (sx * sz), i / sx % sz, 0, false);
+        doc.end_stroke();
+        assert_eq!(ed.save(None, &[]).unwrap(), path);
+        assert!(!ed.doc.as_ref().unwrap().unsaved);
+        let (m, s) = crate::vmodel::load(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(m.edited());
+        assert_eq!(solids(&s), n - 1);
+        assert_eq!(std::fs::read_to_string(dir.join("chest_0_model.json.meta")).unwrap(), "guid: del-juego\n");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "sin ficheros temporales");
+        // Guardar otra vez sin tocar nada deja el mismo texto.
+        let once = std::fs::read_to_string(&path).unwrap();
+        ed.save(None, &[]).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), once);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn modelo_nuevo_lleva_meta() {
+        let (dir, _) = chest_dir("nuevo");
+        let mut ed = Editor::default();
+        ed.new_model([8, 8, 8]);
+        assert!(ed.save(None, &[]).is_err(), "sin ruta no se guarda");
+        let path = dir.join("farol_model.json");
+        ed.save(Some(path.clone()), &[]).unwrap();
+        let meta = std::fs::read_to_string(dir.join("farol_model.json.meta")).unwrap();
+        let lines: Vec<&str> = meta.lines().collect();
+        assert_eq!(lines[0], "fileFormatVersion: 2");
+        let guid = lines[1].strip_prefix("guid: ").unwrap();
+        assert!(guid.len() == 32 && guid.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(lines[2], "TextScriptImporter:");
+        ed.save(None, &[]).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("farol_model.json.meta")).unwrap(), meta);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn guardar_avisa_si_cambio_en_disco() {
+        let (dir, path) = chest_dir("disco");
+        let mut ed = Editor::default();
+        ed.open_model(&path).unwrap();
+        assert!(!ed.changed_on_disk());
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, format!("{text}\n")).unwrap();
+        assert!(ed.changed_on_disk());
+        ed.save(None, &[]).unwrap();
+        assert!(!ed.changed_on_disk());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn modelo_sin_errores_del_juego() {
+        let (dir, path) = chest_dir("errores");
+        let mut ed = Editor::default();
+        ed.open_model(&path).unwrap();
+        assert_eq!(ed.errors(), 0);
+        assert!(ed.open_model(&dir.join("chest_0_model.json.meta")).is_err());
+        assert!(ed.doc.as_ref().unwrap().is_model(), "un fallo al abrir no cierra lo que había");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

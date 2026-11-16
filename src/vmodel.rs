@@ -81,6 +81,13 @@ impl Model {
         Paint { palette, hidden: None, flat: true }
     }
 
+    /// Tras guardar: la cabecera y el orden de las caras pasan a ser los del texto escrito (la paleta viva no cambia).
+    pub fn sync(&mut self, saved: &str) -> Result<()> {
+        let (m, _) = load(saved)?;
+        (self.head, self.order, self.crlf) = (m.head, m.order, m.crlf);
+        Ok(())
+    }
+
     /// Ya se guardó alguna vez desde el editor.
     pub fn edited(&self) -> bool {
         self.raw_note().starts_with(EDITED_MARK)

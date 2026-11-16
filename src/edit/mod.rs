@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 
 use crate::agvox::Meta;
 use crate::bridge::proto::{Interactable, Part};
-use crate::model::{Structure, VoxelGrid};
+use crate::model::{FaceColors, Structure, VoxelGrid, face_key, face_unkey};
+use crate::vmodel::Model;
 
 /// Lo que no son sub-cubos: cambia poco y pesa poco, así que se guarda entero en cada paso del historial.
 #[derive(Clone, Debug, PartialEq)]
@@ -35,6 +36,12 @@ enum Step {
     Grid(Box<VoxelGrid>, Box<VoxelGrid>),
     /// Varios pasos que se deshacen juntos (lo que llega del generador: rejilla + partes + plantas).
     Many(Vec<Step>),
+    /// Modelos: `(clave de cara, color propio antes, después)`; 0 = sin color propio.
+    Faces(Vec<(u32, u8, u8)>),
+    /// Modelos: paleta o punto de apoyo.
+    Model(Box<Model>, Box<Model>),
+    /// Modelos: todos los colores propios de cara de golpe (cambio de tamaño).
+    AllFaces(Box<FaceColors>, Box<FaceColors>),
 }
 
 impl Step {
@@ -44,6 +51,9 @@ impl Step {
             Step::Extras(..) => 1024,
             Step::Grid(a, b) => a.data.len() * 2 + b.data.len() * 2,
             Step::Many(steps) => steps.iter().map(Step::bytes).sum(),
+            Step::Faces(v) => v.len() * 8,
+            Step::Model(..) => 64 << 10,
+            Step::AllFaces(a, b) => (a.len() + b.len()) * 8,
         }
     }
 }
@@ -68,6 +78,8 @@ pub struct Doc {
     /// Cuándo se apuntó el último paso de extras (arrastrar un número no llena el historial).
     last_extras: Option<Instant>,
     stroke: Option<Stroke>,
+    /// `Some` si lo abierto es un modelo de vóxeles del juego (`vmodel`) y no una estructura.
+    pub model: Option<Model>,
 }
 
 /// Trazo en curso: diferencias y dónde está la de cada sub-cubo (repintar dentro del trazo no crece la lista).
@@ -75,11 +87,96 @@ struct Stroke {
     label: String,
     diffs: Vec<(u32, u8, u8, u8, u8)>,
     at: HashMap<u32, usize>,
+    /// Colores propios de cara tocados en el trazo (modelos) y dónde está cada uno.
+    faces: Vec<(u32, u8, u8)>,
+    face_at: HashMap<u32, usize>,
 }
 
 impl Doc {
     pub fn new(meta: Meta, s: Structure, path: Option<PathBuf>) -> Self {
-        Self { meta, s, path, unsaved: false, version: 0, undo: Vec::new(), redo: Vec::new(), last_extras: None, stroke: None }
+        Self {
+            meta,
+            s,
+            path,
+            unsaved: false,
+            version: 0,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            last_extras: None,
+            stroke: None,
+            model: None,
+        }
+    }
+
+    /// Documento de un modelo de vóxeles del juego; se llama como su fichero sin `_model.json`.
+    pub fn new_model(model: Model, s: Structure, path: Option<PathBuf>) -> Self {
+        let name = path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().trim_end_matches(".json").trim_end_matches("_model").to_string())
+            .unwrap_or_else(|| "Modelo nuevo".into());
+        let mut doc = Self::new(Meta { name, ..Default::default() }, s, path);
+        doc.model = Some(model);
+        doc
+    }
+
+    pub fn is_model(&self) -> bool {
+        self.model.is_some()
+    }
+
+    /// Color (byte de rejilla) de la cara `dir` del vóxel `v`: el propio o el de su vóxel.
+    pub fn face_color(&self, v: [i32; 3], dir: u8) -> u8 {
+        self.s.face_colors.get(&face_key(v, dir)).copied().unwrap_or_else(|| self.s.grid.get(v[0], v[1], v[2]))
+    }
+
+    /// Pone (o quita, con 0) el color propio de una cara dentro del trazo en curso.
+    fn set_face(&mut self, key: u32, color: u8) {
+        let old = self.s.face_colors.get(&key).copied().unwrap_or(0);
+        if old == color {
+            return;
+        }
+        let Some(st) = self.stroke.as_mut() else { return };
+        match st.face_at.get(&key) {
+            Some(&k) => st.faces[k].2 = color,
+            None => {
+                st.face_at.insert(key, st.faces.len());
+                st.faces.push((key, old, color));
+            }
+        }
+        if color == 0 {
+            self.s.face_colors.remove(&key);
+        } else {
+            self.s.face_colors.insert(key, color);
+        }
+        self.version += 1;
+        self.unsaved = true;
+    }
+
+    /// Modelos: pinta solo la cara `dir` del vóxel `v` (sombreado dibujado). Con el color de su vóxel, o 0, la cara
+    /// deja de tener color propio. Dentro del trazo en curso (abre uno si no hay).
+    pub fn paint_face(&mut self, v: [i32; 3], dir: u8, color: u8) {
+        let base = self.s.grid.get(v[0], v[1], v[2]);
+        if base == 0 || dir > 5 {
+            return;
+        }
+        if self.stroke.is_none() {
+            self.begin_stroke("Pintar");
+        }
+        self.set_face(face_key(v, dir), if color == base { 0 } else { color });
+    }
+
+    /// Modelos: cambia la paleta o el punto de apoyo con un paso de historial.
+    pub fn edit_model(&mut self, label: &str, f: impl FnOnce(&mut Model)) {
+        self.end_stroke();
+        let Some(before) = self.model.clone() else { return };
+        let mut after = before.clone();
+        f(&mut after);
+        if after == before {
+            return;
+        }
+        self.model = Some(after.clone());
+        self.version += 1;
+        self.push(label.into(), Step::Model(Box::new(before), Box::new(after)));
     }
 
     pub fn extras(&self) -> Extras {
@@ -109,7 +206,13 @@ impl Doc {
     /// Empieza un trazo: todo lo que se pinte hasta `end_stroke` se deshace de una vez.
     pub fn begin_stroke(&mut self, label: &str) {
         self.end_stroke();
-        self.stroke = Some(Stroke { label: label.to_string(), diffs: Vec::new(), at: HashMap::new() });
+        self.stroke = Some(Stroke {
+            label: label.to_string(),
+            diffs: Vec::new(),
+            at: HashMap::new(),
+            faces: Vec::new(),
+            face_at: HashMap::new(),
+        });
     }
 
     /// Pinta un sub-cubo dentro del trazo en curso (abre uno si no hay). `detail` marca o desmarca el detalle.
@@ -119,6 +222,12 @@ impl Doc {
         }
         if self.stroke.is_none() {
             self.begin_stroke("Pintar");
+        }
+        // Pintar o borrar un vóxel de un modelo le quita el sombreado dibujado: sus caras vuelven a ser de su color.
+        if !self.s.face_colors.is_empty() {
+            for d in 0..6 {
+                self.set_face(face_key([x, y, z], d), 0);
+            }
         }
         let i = self.s.grid.index(x, y, z);
         let old_m = self.s.grid.data[i];
@@ -150,10 +259,14 @@ impl Doc {
 
     /// Cierra el trazo en curso y lo apunta en el historial (si cambió algo).
     pub fn end_stroke(&mut self) {
-        let Some(Stroke { label, mut diffs, .. }) = self.stroke.take() else { return };
+        let Some(Stroke { label, mut diffs, mut faces, .. }) = self.stroke.take() else { return };
         diffs.retain(|d| d.1 != d.2 || d.3 != d.4);
-        if !diffs.is_empty() {
-            self.push(label, Step::Voxels(diffs));
+        faces.retain(|f| f.1 != f.2);
+        match (diffs.is_empty(), faces.is_empty()) {
+            (true, true) => {}
+            (false, true) => self.push(label, Step::Voxels(diffs)),
+            (true, false) => self.push(label, Step::Faces(faces)),
+            (false, false) => self.push(label, Step::Many(vec![Step::Voxels(diffs), Step::Faces(faces)])),
         }
     }
 
@@ -181,6 +294,44 @@ impl Doc {
             return;
         }
         self.push(label.into(), Step::Extras(Box::new(before), Box::new(after)));
+    }
+
+    /// Modelos: cambia el tamaño creciendo o encogiendo por +x, +y, +z, sin mover nada de lo que hay (el juego tiene
+    /// posiciones en vóxeles apuntadas fuera del fichero). `false` si no cabe lo ocupado o el tamaño no vale.
+    pub fn resize_model(&mut self, size: [i32; 3]) -> bool {
+        self.end_stroke();
+        let old = &self.s.grid;
+        let mut used = [0; 3];
+        for (i, _) in old.data.iter().enumerate().filter(|(_, b)| **b != 0) {
+            let i = i as i32;
+            let v = [i % old.size[0], i / (old.size[0] * old.size[2]), i / old.size[0] % old.size[2]];
+            used = std::array::from_fn(|k| used[k].max(v[k] + 1));
+        }
+        let fits = (0..3).all(|k| size[k] >= used[k].max(1) && size[k] <= crate::vmodel::MAX_SIDE);
+        if !fits || size == old.size {
+            return false;
+        }
+        let mut grid = VoxelGrid::new(size);
+        for y in 0..used[1] {
+            for z in 0..used[2] {
+                for x in 0..used[0] {
+                    grid.set(x, y, z, old.get(x, y, z));
+                }
+            }
+        }
+        let mut faces = self.s.face_colors.clone();
+        faces.retain(|&k, _| {
+            let v = face_unkey(k).0;
+            grid.in_bounds(v[0], v[1], v[2])
+        });
+        let mut steps = vec![Step::Grid(Box::new(old.clone()), Box::new(grid))];
+        if faces != self.s.face_colors {
+            steps.push(Step::AllFaces(Box::new(self.s.face_colors.clone()), Box::new(faces)));
+        }
+        let step = Step::Many(steps);
+        self.apply(&step, true);
+        self.push("Tamaño".into(), step);
+        true
     }
 
     /// Sustituye la rejilla entera (cambio de tamaño, giro de todo).
@@ -253,6 +404,16 @@ impl Doc {
             }
             Step::Extras(before, after) => self.set_extras(if forward { after } else { before }),
             Step::Grid(before, after) => self.s.grid = (**if forward { after } else { before }).clone(),
+            Step::Faces(faces) => {
+                for &(key, before, after) in faces {
+                    match if forward { after } else { before } {
+                        0 => self.s.face_colors.remove(&key),
+                        c => self.s.face_colors.insert(key, c),
+                    };
+                }
+            }
+            Step::Model(before, after) => self.model = Some((**if forward { after } else { before }).clone()),
+            Step::AllFaces(before, after) => self.s.face_colors = (**if forward { after } else { before }).clone(),
             Step::Many(steps) => {
                 if forward {
                     steps.iter().for_each(|s| self.apply(s, true));
@@ -302,6 +463,136 @@ mod tests {
 
     fn doc() -> Doc {
         Doc::new(Meta::default(), Structure { grid: VoxelGrid::new([8, 8, 8]), ..Default::default() }, None)
+    }
+
+    fn chest() -> Doc {
+        let (m, s) = crate::vmodel::load(&crate::vmodel::tests::lf(crate::vmodel::tests::CHEST)).unwrap();
+        Doc::new_model(m, s, None)
+    }
+
+    /// Un vóxel del cofre con alguna cara de color propio.
+    fn own_voxel(d: &Doc) -> [i32; 3] {
+        face_unkey(*d.s.face_colors.keys().min().unwrap()).0
+    }
+
+    fn own_of(d: &Doc, v: [i32; 3]) -> usize {
+        d.s.face_colors.keys().filter(|&&k| face_unkey(k).0 == v).count()
+    }
+
+    #[test]
+    fn pintar_voxel_borra_sus_caras_propias() {
+        let mut d = chest();
+        let v = own_voxel(&d);
+        let (total, mine) = (d.s.face_colors.len(), own_of(&d, v));
+        assert!(mine > 0);
+        // Pintar con su mismo color también lo deja liso.
+        d.paint(v[0], v[1], v[2], d.s.grid.get(v[0], v[1], v[2]), false);
+        d.end_stroke();
+        assert_eq!(own_of(&d, v), 0);
+        assert_eq!(d.s.face_colors.len(), total - mine, "las de los vecinos siguen");
+    }
+
+    #[test]
+    fn deshacer_restaura_colores_de_cara() {
+        let mut d = chest();
+        let before = d.s.face_colors.clone();
+        let v = own_voxel(&d);
+        d.begin_stroke("Pintar");
+        d.paint(v[0], v[1], v[2], 1, false);
+        d.end_stroke();
+        assert_ne!(d.s.face_colors, before);
+        assert_eq!(d.undo().as_deref(), Some("Pintar"));
+        assert_eq!(d.s.face_colors, before);
+        d.redo();
+        assert_eq!(own_of(&d, v), 0);
+        // Borrar el vóxel y deshacer: vuelve con su sombreado.
+        d.undo();
+        d.paint(v[0], v[1], v[2], 0, false);
+        d.end_stroke();
+        d.undo();
+        assert_eq!(d.s.face_colors, before);
+        assert!(!d.can_undo());
+    }
+
+    #[test]
+    fn pintar_cara_y_deshacer() {
+        let mut d = chest();
+        let v = own_voxel(&d);
+        let base = d.s.grid.get(v[0], v[1], v[2]);
+        let dir = (0..6u8).find(|&x| !d.s.face_colors.contains_key(&face_key(v, x))).unwrap();
+        let other = if base == 1 { 2 } else { 1 };
+        assert_eq!(d.face_color(v, dir), base);
+        d.paint_face(v, dir, other);
+        d.end_stroke();
+        assert_eq!(d.face_color(v, dir), other);
+        assert_eq!(d.s.grid.get(v[0], v[1], v[2]), base, "el vóxel no cambia");
+        d.undo();
+        assert_eq!(d.face_color(v, dir), base);
+        // Pintar una cara con el color de su vóxel le quita el color propio.
+        let own = (0..6u8).find(|&x| d.s.face_colors.contains_key(&face_key(v, x))).unwrap();
+        d.paint_face(v, own, base);
+        d.end_stroke();
+        assert!(!d.s.face_colors.contains_key(&face_key(v, own)));
+        // En el aire no pinta nada.
+        let n = d.history().count();
+        d.paint_face([0, d.s.grid.size[1] - 1, 0], 2, other);
+        d.end_stroke();
+        assert_eq!(d.history().count(), n);
+    }
+
+    #[test]
+    fn encoger_no_deja_caras_huerfanas() {
+        let mut d = chest();
+        let size = d.s.grid.size;
+        let (grid, faces) = (d.s.grid.clone(), d.s.face_colors.clone());
+        assert!(!d.resize_model([size[0] - 1, size[1], size[2]]), "el cofre ocupa todo su ancho");
+        assert!(!d.resize_model([size[0], 300, size[2]]));
+        assert!(!d.resize_model(size), "el mismo tamaño no es un cambio");
+        assert!(!d.can_undo());
+        // Una cara con color propio en una zona que luego se recorta (el vóxel ya no está).
+        assert!(d.resize_model([size[0] + 4, size[1], size[2]]));
+        d.s.face_colors.insert(face_key([size[0] + 2, 0, 0], 2), 1);
+        assert!(d.resize_model(size));
+        assert!(d.s.face_colors.keys().all(|&k| {
+            let v = face_unkey(k).0;
+            d.s.grid.in_bounds(v[0], v[1], v[2])
+        }));
+        assert_eq!(d.s.grid, grid);
+        assert_eq!(d.s.face_colors, faces);
+        d.undo();
+        assert_eq!(d.s.grid.size[0], size[0] + 4);
+        d.undo();
+        assert_eq!(d.s.grid.size, size);
+    }
+
+    #[test]
+    fn crecer_no_mueve_nada() {
+        let mut d = chest();
+        let old = d.s.grid.clone();
+        let size = old.size;
+        assert!(d.resize_model([size[0] + 3, size[1] + 2, size[2] + 5]));
+        for y in 0..size[1] + 2 {
+            for z in 0..size[2] + 5 {
+                for x in 0..size[0] + 3 {
+                    assert_eq!(d.s.grid.get(x, y, z), old.get(x, y, z));
+                }
+            }
+        }
+        assert_eq!(d.undo().as_deref(), Some("Tamaño"));
+        assert_eq!(d.s.grid, old);
+    }
+
+    #[test]
+    fn editar_paleta_se_deshace() {
+        let mut d = chest();
+        let old = d.model.as_ref().unwrap().palette[0];
+        d.edit_model("Cambiar color", |m| m.palette[0] = [1, 2, 3]);
+        assert_eq!(d.model.as_ref().unwrap().palette[0], [1, 2, 3]);
+        assert!(d.unsaved);
+        assert_eq!(d.undo().as_deref(), Some("Cambiar color"));
+        assert_eq!(d.model.as_ref().unwrap().palette[0], old);
+        d.edit_model("Nada", |_| {});
+        assert!(!d.can_undo());
     }
 
     #[test]
