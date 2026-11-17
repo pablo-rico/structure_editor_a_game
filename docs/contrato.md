@@ -404,11 +404,17 @@ Fuente de una estructura hecha a mano; vive en `a_game/ArtSource/Structures/<slu
   // Opcionales (fase 3):
   "replaces": {"kind": "Home", "style": "Northern", "design": 2, "size": [5, 5], "party": 0,
                "rank": null, "district": null, "tier": null},   // sustituye a ese diseño del juego (null = cualquiera)
-  "look": {"district": "Residential", "tier": "Modest", "roles": {"wall": "Plaster"}}  // Aspecto de las herramientas
+  "look": {"district": "Residential", "tier": "Modest", "roles": {"wall": "Plaster"}},  // Aspecto de las herramientas
+  "recipe": {"file": "ArtSource/Structures/torre.rhai", "fingerprint": "55697b2a4208b3d9"}  // la generó una receta
 }
 ```
 
 Sin girar (puerta en −Z). Guardar y volver a abrir da los mismos bytes.
+
+`recipe` lo escribe `cantero` cuando una receta generativa rehace la estructura (`docs/recetas.md`): la receta y la
+huella de lo que dejó (`Doc::fingerprint`). El editor lo conserva al guardar; si la huella ya no casa con el contenido,
+la estructura se ha retocado a mano y la receta no la pisa. El juego y el puente lo ignoran (`export` lee solo los
+campos que conoce).
 
 ## Exportación al juego
 
@@ -476,7 +482,10 @@ Al leer (mismas reglas que `VoxelModel.Parse`, más las del editor):
 Al escribir:
 
 - La cabecera original no se reserializa: solo cambian los valores de `size`, `palette` y `origin`, y `_` gana delante
-  la marca `A mano (editor de estructuras). ` (los scripts de arte de a_game se saltan los modelos que la llevan).
+  la marca `A mano (editor de estructuras). `. **Hoy ningún script de arte de a_game mira esa marca**: relanzar uno
+  pisa el modelo (pendiente en a_game: que se los salten).
+- Un modelo que rehace una receta generativa de `cantero` lleva en `_`, tras la marca, `Receta: <ruta>; huella
+  <16 hex>.`: la huella de lo que la receta dejó (`docs/recetas.md`).
 - `palette`: solo los colores que lleva alguna cara, en su orden; los nuevos al final.
 - `faces`: una por línea (`    x, y, z, d, c`); las que ya estaban, en su orden original (no es uniforme entre
   scripts); las nuevas al final por `(y, z, x, dirección)`. Se conserva el fin de línea del fichero.

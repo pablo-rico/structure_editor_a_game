@@ -1,35 +1,15 @@
 //! Prueba de punta a punta con el puente real: compilar, lanzar, catálogo y una construcción.
 //! Necesita dotnet, Unity y a_game: `cargo test --test bridge_live -- --ignored`.
 
-use std::time::{Duration, Instant};
-
-use structure_editor_a_game::bridge::proto::{self, BuildHeader, BuildRequest, Catalog};
-use structure_editor_a_game::bridge::{self, Event, Paths, Process};
-
-fn wait(p: &Process, secs: u64) -> bridge::Frame {
-    let end = Instant::now() + Duration::from_secs(secs);
-    while Instant::now() < end {
-        match p.events.recv_timeout(Duration::from_millis(200)) {
-            Ok(Event::Frame(f)) => return f,
-            Ok(Event::Exited(why)) => panic!("{why}"),
-            _ => {}
-        }
-    }
-    panic!("el puente no responde");
-}
+use structure_editor_a_game::bridge::Paths;
+use structure_editor_a_game::bridge::client::Client;
+use structure_editor_a_game::bridge::proto::BuildRequest;
 
 #[test]
 #[ignore]
 fn compila_lanza_y_construye() {
-    let paths = Paths::new(Paths::default_agame_root());
-    Paths::check_agame(&paths.agame_root).unwrap();
-    let out = bridge::compile(&paths);
-    assert!(out.ok, "no compila: {:?}\n{}", out.errors, out.log);
-    let mut p = Process::spawn(&paths, || {}).unwrap();
-    p.request("catalog", serde_json::json!({}), &[]).unwrap();
-    let f = wait(&p, 30);
-    assert!(f.error().is_none());
-    let cat: Catalog = serde_json::from_value(f.header).unwrap();
+    let mut c = Client::start(Paths::new(Paths::default_agame_root()), true).unwrap();
+    let cat = c.catalog().unwrap();
     let home = cat.kind("Home").unwrap();
     let req = BuildRequest {
         kind: "Home".into(),
@@ -45,11 +25,12 @@ fn compila_lanza_y_construye() {
         party: 0,
         procedural: false,
     };
-    p.request("build", serde_json::to_value(&req).unwrap(), &[]).unwrap();
-    let f = wait(&p, 30);
-    assert!(f.error().is_none(), "{:?}", f.error());
-    let h: BuildHeader = serde_json::from_value(f.header).unwrap();
-    let s = proto::decode_build(h, &f.payload, req.seed, None).unwrap();
+    let s = c.build(&req).unwrap();
     assert!(s.grid.data.iter().any(|&m| m != 0));
     assert_eq!(s.grid.cells(), [req.width, req.depth]);
+    // Un documento se valida tal cual: la navegación sale de sus sub-cubos.
+    let v = c.validate(&s, None).unwrap();
+    assert_eq!(v.grid.data, s.grid.data);
+    assert_eq!(v.nav.cells_x, req.width);
+    assert!(c.tools().unwrap().len() >= 10);
 }

@@ -33,8 +33,9 @@ pub fn ui_model(ui: &mut Ui, doc: &mut Doc, resize: &mut Resize) {
     if !model.note().is_empty() {
         ui.label(dim(model.note()));
     }
-    if model.edited() {
-        ui.label(dim("Retocado a mano: los scripts de arte ya no lo regeneran."));
+    // Lo que nace de una receta también lleva la marca, pero su receta sí lo protege (huella).
+    if model.edited() && !model.note().starts_with("Receta:") {
+        ui.label(dim("Retocado a mano. Si alguien relanza el script de arte que lo generó, se pierde."));
     }
 
     section(ui, "Tamaño (vóxeles)");

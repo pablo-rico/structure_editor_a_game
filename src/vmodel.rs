@@ -160,6 +160,19 @@ impl Model {
         Ok(())
     }
 
+    /// Cambia la nota `_` (lo que va tras la marca, que se pone si no estaba). Sin comillas ni barras invertidas.
+    pub fn set_note(&mut self, note: &str) {
+        let note: String = note.chars().filter(|c| !matches!(c, '"' | '\\' | '\n' | '\r')).collect();
+        let line = format!("\"_\": \"{EDITED_MARK}{note}\",\n");
+        match self.head.find("\"_\": \"") {
+            Some(at) => {
+                let end = self.head[at..].find("\",\n").map_or(self.head.len(), |e| at + e + 3);
+                self.head.replace_range(at..end, &line);
+            }
+            None => self.head = self.head.replacen("{\n", &format!("{{\n  {line}"), 1),
+        }
+    }
+
     /// Ya se guardó alguna vez desde el editor.
     pub fn edited(&self) -> bool {
         self.raw_note().starts_with(EDITED_MARK)
@@ -187,7 +200,7 @@ fn ints<const N: usize>(v: &serde_json::Value, what: &str) -> Result<[i32; N]> {
 }
 
 /// Caras expuestas de lo sólido de `g`, salvo las de abajo en y = 0 (el formato nunca las lleva).
-fn exposed(g: &VoxelGrid) -> Vec<([i32; 3], u8)> {
+pub fn exposed(g: &VoxelGrid) -> Vec<([i32; 3], u8)> {
     let [sx, sy, sz] = g.size;
     let mut out = Vec::new();
     for y in 0..sy {
@@ -385,6 +398,82 @@ pub fn load(text: &str) -> Result<(Model, Structure)> {
         ..Default::default()
     };
     Ok((model, s))
+}
+
+/// Tonos de un material sombreado, como bytes de color de la rejilla: el propio vóxel es el lateral.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tones {
+    /// Caras de arriba.
+    pub top: u8,
+    /// Caras de arriba en el borde (les falta algún vecino al mismo nivel).
+    pub rim: u8,
+    /// Caras de abajo y laterales bajo un saliente.
+    pub under: u8,
+}
+
+/// Sombreado dibujado de los modelos del juego (la regla de `ArtSource/Intro/intro_models.py`, `face_color`): tapa
+/// clara, borde de la tapa un paso más claro, laterales en el color del vóxel y, bajo un saliente o por debajo, en
+/// sombra. `tones` va por byte de color del vóxel; los que no están no se tocan. Devuelve el color de cada cara
+/// expuesta de esos vóxeles, para `Doc::paint_face`.
+pub fn shade(s: &Structure, tones: &HashMap<u8, Tones>) -> Vec<([i32; 3], u8, u8)> {
+    let g = &s.grid;
+    exposed(g)
+        .into_iter()
+        .filter_map(|(v, d)| {
+            let base = g.get(v[0], v[1], v[2]);
+            let t = tones.get(&base)?;
+            let color = match d {
+                2 => {
+                    let edge = [[1, 0], [-1, 0], [0, 1], [0, -1]].iter().any(|e| g.get(v[0] + e[0], v[1], v[2] + e[1]) == 0);
+                    if edge { t.rim } else { t.top }
+                }
+                3 => t.under,
+                _ => {
+                    let n = DIRS[d as usize];
+                    if g.get(v[0] + n[0], v[1] + 1, v[2] + n[2]) != 0 { t.under } else { base }
+                }
+            };
+            Some((v, d, color))
+        })
+        .collect()
+}
+
+/// FNV-1a de 64 bits (el de las muestras de paridad del puente).
+pub fn fnv1a(hash: &mut u64, bytes: &[u8]) {
+    for &b in bytes {
+        *hash ^= b as u64;
+        *hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+}
+
+pub const FNV_SEED: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// Huella de lo que el fichero de un modelo guarda de `s`: tamaño y caras expuestas con su color final. No depende
+/// del orden de la paleta ni del de las caras, ni del color de los vóxeles enterrados (que el fichero no lleva).
+pub fn fingerprint(model: &Model, s: &Structure) -> u64 {
+    let mut h = FNV_SEED;
+    for n in s.grid.size {
+        fnv1a(&mut h, &n.to_le_bytes());
+    }
+    for (key, c) in face_colors(model, s) {
+        fnv1a(&mut h, &key.to_le_bytes());
+        fnv1a(&mut h, &c);
+    }
+    h
+}
+
+/// Color final de cada cara expuesta (`face_key`), por orden de clave: lo que el fichero guarda de los vóxeles.
+pub fn face_colors(model: &Model, s: &Structure) -> Vec<(u32, Rgb)> {
+    let mut faces: Vec<(u32, Rgb)> = exposed(&s.grid)
+        .into_iter()
+        .map(|(v, d)| {
+            let key = face_key(v, d);
+            let b = s.face_colors.get(&key).copied().unwrap_or_else(|| s.grid.get(v[0], v[1], v[2]));
+            (key, model.palette.get((b as usize).wrapping_sub(1)).copied().unwrap_or([255, 0, 255]))
+        })
+        .collect();
+    faces.sort_unstable();
+    faces
 }
 
 /// Cambia en la cabecera el valor (una lista en una línea) de `key`.
@@ -845,6 +934,57 @@ pub(crate) mod tests {
             "solo los troncos tienen copa"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sombreado_de_cuatro_tonos() {
+        // Una losa de 3×3 con un pilar en el centro y un voladizo encima que sale hacia +x.
+        let (_, mut s) = Model::new([4, 4, 3]);
+        for x in 0..3 {
+            for z in 0..3 {
+                s.grid.set(x, 0, z, 1);
+            }
+        }
+        s.grid.set(1, 1, 1, 1);
+        s.grid.set(1, 2, 1, 1);
+        s.grid.set(2, 2, 1, 1);
+        let tones = HashMap::from([(1, Tones { top: 2, rim: 3, under: 4 })]);
+        let faces: HashMap<([i32; 3], u8), u8> = shade(&s, &tones).into_iter().map(|(v, d, c)| ((v, d), c)).collect();
+        assert_eq!(faces[&([0, 0, 0], 2)], 3, "tapa en el borde");
+        assert_eq!(faces[&([2, 2, 1], 2)], 3, "tapa del voladizo: borde");
+        assert_eq!(faces[&([1, 1, 1], 0)], 4, "lateral bajo el voladizo");
+        assert_eq!(faces[&([1, 1, 1], 1)], 1, "lateral despejado: el color del vóxel");
+        assert_eq!(faces[&([2, 2, 1], 3)], 4, "por debajo");
+        assert!(!faces.contains_key(&([0, 0, 0], 3)), "la base no lleva cara");
+        // Una tapa rodeada por sus cuatro lados es tapa, no borde.
+        let (_, mut flat) = Model::new([3, 1, 3]);
+        flat.grid.data.fill(1);
+        let faces: HashMap<([i32; 3], u8), u8> = shade(&flat, &tones).into_iter().map(|(v, d, c)| ((v, d), c)).collect();
+        assert_eq!((faces[&([1, 0, 1], 2)], faces[&([0, 0, 1], 2)]), (2, 3));
+        // Un color sin tonos no se toca.
+        assert!(shade(&flat, &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn la_nota_se_cambia_y_la_huella_no_depende_del_orden() {
+        let (mut m, s) = load(&lf(CHEST)).unwrap();
+        let before = fingerprint(&m, &s);
+        m.set_note("Receta: ArtSource/Recetas/cofre.rhai; huella 0123.");
+        assert!(m.edited());
+        assert_eq!(m.note(), "Receta: ArtSource/Recetas/cofre.rhai; huella 0123.");
+        // Guardar (compacta la paleta, reordena caras nuevas) y volver a leer deja la misma huella.
+        let (m2, s2) = load(&save(&m, &s).unwrap()).unwrap();
+        assert_eq!(m2.note(), m.note());
+        assert_eq!(fingerprint(&m2, &s2), before);
+        // Cambiar un vóxel la cambia.
+        let mut s3 = s2.clone();
+        let i = s3.grid.data.iter().position(|&b| b != 0).unwrap();
+        s3.grid.data[i] = 0;
+        assert_ne!(fingerprint(&m2, &s3), before);
+        // Un modelo sin nota la estrena.
+        let (mut new, _) = Model::new([2, 2, 2]);
+        new.set_note("x");
+        assert_eq!(new.note(), "x");
     }
 
     #[test]

@@ -121,8 +121,8 @@ casilla) y con colores libres en vez de materiales. Se editan igual que una estr
   sitio) y el **punto de apoyo** es el punto del modelo que cae en la esquina de su casilla.
 - **Troncos de árboles con copa de hojas**: las hojas no son vóxeles y no se editan aquí; los cubos fantasma marcan
   dónde va cada racimo.
-- Un modelo retocado queda marcado, y los scripts de arte del juego ya no lo regeneran (hay que pedirlo a propósito con
-  `--pisar-editados`).
+- Un modelo retocado queda marcado en su nota. **Ojo:** los scripts de arte del juego todavía no miran esa marca; si
+  alguien relanza el script del que salió el modelo, lo pisa.
 
 Un **modelo nuevo no sale en el juego solo por existir**: programación tiene que enlazarlo a un objeto con su mismo
 nombre (la pestaña Validación lo recuerda). Lo mismo si cambias el **tamaño** de un modelo que ya existía: avisa, porque
@@ -159,6 +159,25 @@ piezas abiertas (fuentes, puestos) todavía no se pueden exportar.
 | «Esta combinación ha fallado al generarse» | Un plano del juego falla con esos parámetros. El error completo está en la consola; en el Muestrario, clic derecho en la celda lo copia. |
 | Un modelo de la Biblioteca dice «No se puede abrir» | Su fichero no encierra un sólido o está a medio escribir. El motivo sale al pasar el ratón; el editor no lo abre para no guardarlo mal. |
 | Exportar da error | Hay errores en la validación de alguna estructura de `ArtSource/Structures`, o el a_game elegido no tiene la rama de estructuras a mano. |
+
+## Sin ventana: `cantero`
+
+El mismo editor desde la línea de comandos, pensado para que Claude Code (u otro agente) haga y retoque estructuras y
+modelos: escribe una **receta** (un script corto con cajas, cilindros, tejados y las herramientas de construcción del
+juego), la ejecuta y mira el resultado en una **lámina** PNG con reglas de coordenadas.
+
+```sh
+cargo build --release --bin cantero
+cantero run fixtures/recetas/pozo.rhai --salida borrador --render --out pozo.png   # receta → modelo → lámina
+cantero info borrador/pozo_model.json          # tamaño, colores, avisos, huella
+cantero render <fichero> --planta 0 --capas rejilla,entrada,partes   # un edificio cortado por la planta baja
+cantero api                                    # funciones de las recetas
+```
+
+- Con el editor abierto sobre el mismo fichero, lo que `cantero` cambia **se recarga solo**; si tienes cambios sin
+  guardar, pregunta.
+- Una receta no pisa lo que has retocado a mano después: se niega y lo dice.
+- Para Claude Code hay una skill en `.claude/skills/cantero/`; cómo está hecho, en `docs/recetas.md`.
 
 ## Publicar una versión
 

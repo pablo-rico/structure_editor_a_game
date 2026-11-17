@@ -32,8 +32,10 @@ pub(super) enum Confirm {
     New,
     Open(PathBuf),
     Delete(PathBuf),
-    /// El modelo abierto ha cambiado en disco desde que se abrió: guardar lo pisaría.
+    /// Lo abierto ha cambiado en disco desde que se abrió: guardar lo pisaría.
     Overwrite,
+    /// Lo abierto ha cambiado en disco y aquí hay cambios sin guardar: ¿recargar o quedarse con lo de aquí?
+    Reload,
     /// Modelo nuevo: vacío, o importado de un `.vox`.
     NewModel,
     ImportModel,
@@ -101,7 +103,12 @@ pub(super) struct EditUi {
     pub explore_original: bool,
     /// Si el Aspecto se abrió para construir (se cierra al dejar de construir).
     look_for: Option<bool>,
+    /// Cuándo se miró por última vez si el fichero abierto ha cambiado en disco.
+    disk_checked: Option<std::time::Instant>,
 }
+
+/// Cada cuánto se mira si el fichero abierto ha cambiado en disco.
+const DISK_POLL: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Pista de una herramienta de construcción según su gesto (barra de estado y tooltip de la tira).
 pub(super) fn build_hint(target: &str) -> &'static str {
@@ -300,6 +307,53 @@ impl State {
         self.save_checked(as_new, false);
     }
 
+    /// Una vez por fotograma: si el fichero abierto ha cambiado en disco (`cantero`, un script de arte, git…), se
+    /// recarga solo; con cambios sin guardar, se pregunta.
+    pub(super) fn poll_disk(&mut self, ctx: &egui::Context) {
+        if self.editor.doc.as_ref().is_none_or(|d| d.path.is_none()) {
+            return;
+        }
+        // Sin tocar nada no hay fotogramas: que el sondeo siga.
+        ctx.request_repaint_after(DISK_POLL);
+        if self.ed.disk_checked.is_some_and(|t| t.elapsed() < DISK_POLL) {
+            return;
+        }
+        self.ed.disk_checked = Some(std::time::Instant::now());
+        if self.confirm.is_some() || !self.editor.changed_on_disk() {
+            return;
+        }
+        if self.editor.doc.as_ref().is_some_and(|d| d.unsaved) {
+            self.confirm = Some(Confirm::Reload);
+        } else {
+            self.reload_from_disk();
+        }
+    }
+
+    /// Recarga lo abierto desde su fichero sin mover la cámara ni la planta de trabajo.
+    fn reload_from_disk(&mut self) {
+        let materials = self.materials();
+        match self.editor.reload(&materials) {
+            Ok(()) => {
+                self.cancel_build();
+                self.ed.shown = None;
+                // La planta de trabajo puede no existir ya.
+                let floors = self.editor.doc.as_ref().map_or(0, |d| d.s.band_floors.len());
+                if self.ed.floor.is_some_and(|i| i >= floors) {
+                    self.set_floor(None);
+                }
+                if let Some(path) = self.editor.doc.as_ref().and_then(|d| d.path.clone()).filter(|p| is_model_path(p)) {
+                    self.ed.guides = crate::vmodel::canopy_guides(&path);
+                }
+                self.toasts.push(ToastKind::Info, "Ha cambiado en disco: recargado.", None);
+            }
+            Err(e) => {
+                // Se da por visto: se volverá a intentar cuando el fichero cambie otra vez.
+                self.editor.seen_on_disk();
+                self.toasts.push(ToastKind::Error, format!("Ha cambiado en disco, pero no se puede leer: {e:#}"), None);
+            }
+        }
+    }
+
     /// Guarda un modelo en su fichero del juego. `overwrite`: aunque haya cambiado en disco.
     fn save_model(&mut self, as_new: bool, overwrite: bool) {
         let Some(doc) = &self.editor.doc else { return };
@@ -383,11 +437,37 @@ impl State {
 
     pub(super) fn confirm_dialog(&mut self, ctx: &egui::Context) {
         let Some(what) = &self.confirm else { return };
+        if matches!(what, Confirm::Reload) {
+            let mut go = None;
+            egui::Modal::new(egui::Id::new("confirmar-recargar")).show(ctx, |ui| {
+                ui.set_width(420.0);
+                ui.label(RichText::new("Ha cambiado en disco").font(theme::semibold(18.0)).color(theme::TITLE));
+                ui.label("Alguien ha cambiado este fichero mientras lo editabas, y aquí hay cambios sin guardar. Si recargas, se pierden los de aquí; si sigues, al guardar se pierden los de fuera.");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(RichText::new("Recargar").color(theme::TEXT)).fill(theme::DANGER_BG)).clicked() {
+                        go = Some(true);
+                    }
+                    if ui.button("Seguir con lo mío").clicked() {
+                        go = Some(false);
+                    }
+                });
+            });
+            if let Some(go) = go {
+                self.confirm = None;
+                if go {
+                    self.reload_from_disk();
+                } else {
+                    self.editor.seen_on_disk();
+                }
+            }
+            return;
+        }
         if matches!(what, Confirm::Overwrite) {
             let mut go = None;
             egui::Modal::new(egui::Id::new("confirmar-pisar")).show(ctx, |ui| {
                 ui.set_width(420.0);
-                ui.label(RichText::new("Este modelo ha cambiado en disco").font(theme::semibold(18.0)).color(theme::TITLE));
+                ui.label(RichText::new("Ha cambiado en disco").font(theme::semibold(18.0)).color(theme::TITLE));
                 ui.label("Alguien lo ha cambiado desde que lo abriste (un script de arte, git…). Si guardas, se pierde ese cambio.");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -465,7 +545,7 @@ impl State {
             }
             Some(Confirm::NewModel) => self.start_model(None),
             Some(Confirm::ImportModel) => self.import_vox_model(),
-            Some(Confirm::Overwrite) | None => {}
+            Some(Confirm::Overwrite | Confirm::Reload) | None => {}
         }
     }
 

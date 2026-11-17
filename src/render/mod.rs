@@ -11,6 +11,7 @@
 
 mod gpu;
 mod overlay;
+pub mod sheet;
 
 pub use gpu::set_agame_root;
 
@@ -220,23 +221,7 @@ fn extent(s: &Structure) -> Vec3 {
 
 /// Caja de lo sólido en unidades de mundo (la rejilla entera si está vacía).
 fn solid_box(s: &Structure) -> (Vec3, Vec3) {
-    let g = &s.grid;
-    let (mut lo, mut hi) = ([i32::MAX; 3], [i32::MIN; 3]);
-    for (i, &m) in g.data.iter().enumerate() {
-        if m != 0 {
-            let i = i as i32;
-            let (x, z, y) = (
-                i % g.size[0],
-                i / g.size[0] % g.size[2],
-                i / (g.size[0] * g.size[2]),
-            );
-            lo = [lo[0].min(x), lo[1].min(y), lo[2].min(z)];
-            hi = [hi[0].max(x + 1), hi[1].max(y + 1), hi[2].max(z + 1)];
-        }
-    }
-    if lo[0] > hi[0] {
-        return (Vec3::ZERO, extent(s));
-    }
+    let Some((lo, hi)) = s.grid.solid_box() else { return (Vec3::ZERO, extent(s)) };
     let w = |p: [i32; 3]| mesh::sub_to_local(p[0] as f32, p[1] as f32, p[2] as f32);
     (w(lo), w(hi))
 }
@@ -556,9 +541,8 @@ fn frame_uniforms(
 }
 
 /// Escala (puede ser < 1) a la que la rejilla cabe en `px` píxeles con un 10 % de aire.
-fn fit_scale(view: &ViewState, s: &Structure, px: [f32; 2]) -> f32 {
+fn fit_scale(view: &ViewState, lo: Vec3, hi: Vec3, px: [f32; 2]) -> f32 {
     let (right, up, _) = basis(view.yaw_deg, view.elevation_deg);
-    let (lo, hi) = view.visible_box(s);
     let c = box_corners(lo, hi);
     let extent = |axis: Vec3| {
         let d = c.map(|p| p.dot(axis));
@@ -668,7 +652,8 @@ impl Viewport {
             };
         };
         if view.fit && px[0] > 1.0 && px[1] > 1.0 {
-            view.scale = (fit_scale(view, &s, px).floor() as u32).clamp(1, MAX_SCALE);
+            let (lo, hi) = view.visible_box(&s);
+            view.scale = (fit_scale(view, lo, hi, px).floor() as u32).clamp(1, MAX_SCALE);
             view.fit = false;
         }
         self.input(ui, &response, view, &s, ppp);
@@ -1005,83 +990,137 @@ pub fn render_image(
     view: &ViewState,
     size_px: [u32; 2],
 ) -> egui::ColorImage {
-    let shared = Shared::get(rs);
-    let mut gpu = Gpu::new(&rs.device, &shared);
-    gpu.upload_mesh(&rs.device, &mesh::build(s, paint));
-    let mut view = view.clone();
-    let px = size_px.map(|v| v.max(1) as f32);
-    let mut shrink = 1.0;
-    if view.fit {
-        view.frame(s);
-        let f = fit_scale(&view, s, px);
-        view.scale = (f.floor() as u32).clamp(1, MAX_SCALE);
-        if f < 1.0 {
-            shrink = f.max(0.05);
-        }
-        view.fit = false;
+    let img = Offscreen::new(rs, s, paint).shot(view, size_px, None).image;
+    egui::ColorImage::from_rgba_unmultiplied(
+        [img.width() as usize, img.height() as usize],
+        img.as_raw(),
+    )
+}
+
+/// Varias imágenes fuera de pantalla de la misma estructura: se malla y se sube una sola vez.
+pub struct Offscreen<'a> {
+    rs: &'a egui_wgpu::RenderState,
+    shared: Arc<Shared>,
+    gpu: Gpu,
+    s: &'a Structure,
+    paint: &'a Paint,
+    /// Llenar la imagen aunque el zoom no sea entero (se dibuja al entero de arriba y se reduce): para revisar, mejor
+    /// grande que píxel a píxel.
+    pub fill: bool,
+}
+
+/// Una imagen de [`Offscreen::shot`] y cómo caen en ella los sub-cubos.
+pub struct Shot {
+    pub image: image::RgbaImage,
+    cam: Camera,
+    /// Píxel de la imagen = píxel de arte · `k` − `offset`.
+    k: Vec2,
+    offset: Vec2,
+}
+
+impl Shot {
+    /// Píxel de la imagen (x a la derecha, y hacia abajo) de un punto en coordenadas de sub-cubo.
+    pub fn project(&self, sub: [f32; 3]) -> Option<[f32; 2]> {
+        let p = self.cam.project(mesh::sub_to_local(sub[0], sub[1], sub[2]))?;
+        Some((p * self.k - self.offset).into())
     }
-    let canvas = px.map(|v| v / shrink);
-    let art = canvas.map(|v| {
-        let n = (v / view.scale as f32).ceil() as u32;
-        n + n % 2
-    });
-    let cam = Camera::new(&view, art, &corners(s));
-    let cut = view.cut(s);
-    let geom = overlay::build(&overlay::Inputs {
-        structure: s,
-        paint,
-        view: &view,
-        cut: cut.as_ref(),
-        hover: None,
-        highlight: view.highlight,
-        time: 0.0,
-    });
-    let (globals, post, overlay_uniform) = frame_uniforms(s, &view, &cam, shared.lut_on);
-    let ghost = view.ghost_upper && cut.is_some();
-    gpu.render(
-        &rs.device,
-        &rs.queue,
-        &shared,
-        art,
-        &Frame {
-            globals,
-            post,
-            overlay_uniform,
-            overlay: &geom,
-            ghost,
-        },
-    );
-    let Some(([w, h], rgba)) = gpu.read_art(&rs.device, &rs.queue) else {
-        return egui::ColorImage::filled(
-            [size_px[0] as usize, size_px[1] as usize],
-            theme::VIEW_BG,
+}
+
+impl<'a> Offscreen<'a> {
+    pub fn new(rs: &'a egui_wgpu::RenderState, s: &'a Structure, paint: &'a Paint) -> Self {
+        let shared = Shared::get(rs);
+        let mut gpu = Gpu::new(&rs.device, &shared);
+        gpu.upload_mesh(&rs.device, &mesh::build(s, paint));
+        Self { rs, shared, gpu, s, paint, fill: false }
+    }
+
+    /// Imagen de `size_px` píxeles. Con `view.fit` encuadra lo sólido, o `region` (caja `[x0, y0, z0, x1, y1, z1)` en
+    /// sub-cubos) si se da; si no cabe ni a escala 1, se dibuja más grande y se reduce.
+    pub fn shot(&mut self, view: &ViewState, size_px: [u32; 2], region: Option<[i32; 6]>) -> Shot {
+        let (rs, s) = (self.rs, self.s);
+        let mut view = view.clone();
+        let size_px = size_px.map(|v| v.max(1));
+        let px = size_px.map(|v| v as f32);
+        let mut shrink = 1.0;
+        if view.fit {
+            let (lo, hi) = match region {
+                Some(b) => (
+                    mesh::sub_to_local(b[0] as f32, b[1] as f32, b[2] as f32),
+                    mesh::sub_to_local(b[3] as f32, b[4] as f32, b[5] as f32),
+                ),
+                None => view.visible_box(s),
+            };
+            view.focus = (lo + hi) * 0.5;
+            let f = fit_scale(&view, lo, hi, px);
+            view.scale = (f.floor() as u32).clamp(1, MAX_SCALE);
+            if f < 1.0 {
+                shrink = f.max(0.05);
+            } else if self.fill && f.fract() > 0.05 && view.scale < MAX_SCALE {
+                view.scale += 1;
+                shrink = f / view.scale as f32;
+            }
+            view.fit = false;
+        }
+        let canvas = px.map(|v| v / shrink);
+        let art = canvas.map(|v| {
+            let n = (v / view.scale as f32).ceil() as u32;
+            n + n % 2
+        });
+        let cam = Camera::new(&view, art, &corners(s));
+        let cut = view.cut(s);
+        let geom = overlay::build(&overlay::Inputs {
+            structure: s,
+            paint: self.paint,
+            view: &view,
+            cut: cut.as_ref(),
+            hover: None,
+            highlight: view.highlight,
+            time: 0.0,
+        });
+        let (globals, post, overlay_uniform) = frame_uniforms(s, &view, &cam, self.shared.lut_on);
+        let ghost = view.ghost_upper && cut.is_some();
+        self.gpu.render(
+            &rs.device,
+            &rs.queue,
+            &self.shared,
+            art,
+            &Frame {
+                globals,
+                post,
+                overlay_uniform,
+                overlay: &geom,
+                ghost,
+            },
         );
-    };
-    let img = image::RgbaImage::from_raw(w, h, rgba).expect("tamaño de la lectura");
-    let img = if shrink < 1.0 {
-        image::imageops::resize(
-            &img,
-            size_px[0],
-            size_px[1],
-            image::imageops::FilterType::Triangle,
-        )
-    } else {
+        let Some(([w, h], rgba)) = self.gpu.read_art(&rs.device, &rs.queue) else {
+            let [r, g, b, a] = theme::VIEW_BG.to_array();
+            let image = image::RgbaImage::from_pixel(size_px[0], size_px[1], image::Rgba([r, g, b, a]));
+            return Shot { image, cam, k: Vec2::ONE, offset: Vec2::ZERO };
+        };
+        let img = image::RgbaImage::from_raw(w, h, rgba).expect("tamaño de la lectura");
+        if shrink < 1.0 {
+            let image = image::imageops::resize(
+                &img,
+                size_px[0],
+                size_px[1],
+                image::imageops::FilterType::Triangle,
+            );
+            let k = Vec2::new(px[0] / w as f32, px[1] / h as f32);
+            return Shot { image, cam, k, offset: Vec2::ZERO };
+        }
         // Escalado entero con Point, centrado y recortado al tamaño pedido.
         let k = view.scale;
         let (ox, oy) = (
             (w * k) as i64 - size_px[0] as i64,
             (h * k) as i64 - size_px[1] as i64,
         );
-        image::RgbaImage::from_fn(size_px[0], size_px[1], |x, y| {
+        let image = image::RgbaImage::from_fn(size_px[0], size_px[1], |x, y| {
             let sx = ((x as i64 + ox / 2) / k as i64).clamp(0, w as i64 - 1) as u32;
             let sy = ((y as i64 + oy / 2) / k as i64).clamp(0, h as i64 - 1) as u32;
             *img.get_pixel(sx, sy)
-        })
-    };
-    egui::ColorImage::from_rgba_unmultiplied(
-        [img.width() as usize, img.height() as usize],
-        img.as_raw(),
-    )
+        });
+        Shot { image, cam, k: Vec2::splat(k as f32), offset: Vec2::new((ox / 2) as f32, (oy / 2) as f32) }
+    }
 }
 
 /// `RenderState` sin ventana (tests, capturas por lotes).

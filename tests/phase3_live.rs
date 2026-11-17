@@ -46,16 +46,7 @@ fn build(p: &mut Process, req: &BuildRequest) -> (BuildHeader, Structure) {
 }
 
 fn doc(s: &Structure) -> (serde_json::Value, Vec<u8>) {
-    let mut payload = s.grid.data.clone();
-    if let Some(d) = &s.grid.detail {
-        payload.extend_from_slice(d);
-    }
-    let h = json!({
-        "size": s.grid.size, "groundLevel": s.ground_level, "bandStarts": s.band_starts, "bandFloors": s.band_floors,
-        "entrance": s.entrance, "courtyard": s.courtyard, "parts": s.parts, "interactables": s.interactables,
-        "hasDetail": s.grid.detail.is_some(),
-    });
-    (h, payload)
+    proto::doc_request(s, None)
 }
 
 #[test]
@@ -133,6 +124,7 @@ fn herramientas_muebles_y_sustituciones() {
         style: "Northern".into(),
         replaces: Some(Replaces { kind: "TownHall".into(), style: "Northern".into(), design: 0, size: [10, 10], party: 0, ..Default::default() }),
         look: None,
+        recipe: None,
     };
     let file = dir.join("ayuntamiento_de_prueba.agvox");
     std::fs::write(&file, agvox::save(&meta, &edited, &cat.materials).unwrap()).unwrap();

@@ -160,6 +160,9 @@ pub struct App {
     docks: [DockState<Tab>; 2],
     st: State,
     capture: Option<Capture>,
+    /// Fichero pasado como argumento (`structure_editor_a_game <fichero>`, «Abrir con»): se abre en Editar en cuanto
+    /// llega el catálogo del generador.
+    start_file: Option<PathBuf>,
 }
 
 /// Captura automática para revisar la interfaz sin permiso de grabación de pantalla:
@@ -309,7 +312,8 @@ impl App {
             asked: false,
             ready_at: None,
         });
-        Self { docks, st, capture }
+        let start_file = std::env::args_os().nth(1).map(PathBuf::from);
+        Self { docks, st, capture, start_file }
     }
 
     fn tick_capture(&mut self, ctx: &egui::Context) {
@@ -1254,6 +1258,7 @@ impl eframe::App for App {
         self.st.handle(&ctx, replies);
         let materials = self.st.catalog.as_ref().map(|c| c.materials.clone()).unwrap_or_default();
         self.st.editor.tick(&mut self.st.host, &materials);
+        self.st.poll_disk(&ctx);
         self.st.shortcuts(&ctx);
         let m = self.st.mode as usize;
         if self.st.reset_layout {
@@ -1310,6 +1315,10 @@ impl eframe::App for App {
         self.st.help(&ctx);
         self.st.confirm_dialog(&ctx);
         self.st.edit_dialogs(&ctx);
+        if let Some(path) = self.start_file.take_if(|_| self.st.catalog.is_some()) {
+            // Absoluta: el sondeo de cambios en disco y «recientes» no dependen de la carpeta de trabajo.
+            self.st.ask_open_path(std::path::absolute(&path).unwrap_or(path));
+        }
         self.tick_capture(&ctx);
     }
 

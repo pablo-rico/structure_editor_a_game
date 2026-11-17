@@ -49,6 +49,29 @@ impl VoxelGrid {
         }
     }
 
+    /// Caja `(mín, máx)` de lo sólido, con el máximo fuera (`x0 <= x < x1`); `None` si está vacía.
+    pub fn solid_box(&self) -> Option<([i32; 3], [i32; 3])> {
+        let (mut lo, mut hi) = ([i32::MAX; 3], [i32::MIN; 3]);
+        for (i, &m) in self.data.iter().enumerate() {
+            if m != 0 {
+                let i = i as i32;
+                let (x, z, y) = (i % self.size[0], i / self.size[0] % self.size[2], i / (self.size[0] * self.size[2]));
+                lo = [lo[0].min(x), lo[1].min(y), lo[2].min(z)];
+                hi = [hi[0].max(x + 1), hi[1].max(y + 1), hi[2].max(z + 1)];
+            }
+        }
+        (lo[0] < hi[0]).then_some((lo, hi))
+    }
+
+    /// Sub-cubos por valor de byte (el 0 es el aire).
+    pub fn counts(&self) -> [u32; 256] {
+        let mut out = [0u32; 256];
+        for &m in &self.data {
+            out[m as usize] += 1;
+        }
+        out
+    }
+
     /// Celdas que cubre en el suelo: `[sx / 8, sz / 8]`.
     pub fn cells(&self) -> [i32; 2] {
         [self.size[0] / SUB, self.size[2] / SUB]

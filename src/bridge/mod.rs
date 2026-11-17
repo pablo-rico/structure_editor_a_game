@@ -1,6 +1,7 @@
 //! Cliente del puente C# (`bridge/`): compilarlo con dotnet, lanzarlo como proceso hijo y hablarle por tramas
 //! (`docs/contrato.md`). Todo lo lento va en hilos; la UI solo encola peticiones y recoge eventos con `poll`.
 
+pub mod client;
 pub mod proto;
 
 use std::io::{BufRead, BufReader, Read, Write};

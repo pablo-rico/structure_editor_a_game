@@ -22,6 +22,16 @@ pub struct Meta {
     pub replaces: Option<Replaces>,
     /// Aspecto de las herramientas de construcción.
     pub look: Option<Look>,
+    /// Receta de `cantero` que generó la estructura y la huella de lo que escribió (docs/recetas.md).
+    pub recipe: Option<RecipeNote>,
+}
+
+/// De qué receta salió un documento y cómo quedó: si la huella ya no casa, alguien lo ha retocado después.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipeNote {
+    pub file: String,
+    pub fingerprint: String,
 }
 
 /// Diseño procedural del juego que esta estructura sustituye. `rank`, `district` y `tier` a `None` = cualquiera.
@@ -74,6 +84,8 @@ struct File {
     replaces: Option<Replaces>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     look: Option<Look>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recipe: Option<RecipeNote>,
 }
 
 /// Tramos `(valor u8, largo u16 LE)`, largo 1–65535.
@@ -139,6 +151,7 @@ pub fn save(meta: &Meta, s: &Structure, materials: &[String]) -> Result<String> 
         interactables: s.interactables.clone(),
         replaces: meta.replaces.clone(),
         look: meta.look.clone(),
+        recipe: meta.recipe.clone(),
     };
     Ok(serde_json::to_string_pretty(&file)? + "\n")
 }
@@ -176,7 +189,7 @@ pub fn load(json: &str, materials: &[String]) -> Result<(Meta, Structure)> {
         interactables: f.interactables,
         ..Default::default()
     };
-    Ok((Meta { id: f.id, name: f.name, style: f.style, replaces: f.replaces, look: f.look }, s))
+    Ok((Meta { id: f.id, name: f.name, style: f.style, replaces: f.replaces, look: f.look, recipe: f.recipe }, s))
 }
 
 #[cfg(test)]
@@ -235,6 +248,7 @@ mod tests {
                 ..Default::default()
             }),
             look: Some(Look { district: "Noble".into(), tier: "Rich".into(), roles: [("wall".into(), "Stone".into())].into() }),
+            recipe: Some(RecipeNote { file: "ArtSource/Structures/torre.rhai".into(), fingerprint: "00ff".into() }),
         };
         let json = save(&meta, &sample(), &names()).unwrap();
         let (m2, s2) = load(&json, &names()).unwrap();

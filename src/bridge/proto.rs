@@ -363,6 +363,29 @@ pub fn decode_stamp(h: &serde_json::Value, payload: &[u8]) -> Result<Stamp> {
     })
 }
 
+/// Cabecera y carga de un documento para `validate` y `tool` (docs/contrato.md).
+pub fn doc_request(s: &Structure, replaces: Option<&crate::agvox::Replaces>) -> (serde_json::Value, Vec<u8>) {
+    let mut header = serde_json::json!({
+        "size": s.grid.size,
+        "groundLevel": s.ground_level,
+        "bandStarts": s.band_starts,
+        "bandFloors": s.band_floors,
+        "entrance": s.entrance,
+        "courtyard": s.courtyard,
+        "parts": s.parts,
+        "interactables": s.interactables,
+        "hasDetail": s.grid.detail.is_some(),
+    });
+    if let Some(r) = replaces {
+        header["replaces"] = serde_json::to_value(r).unwrap_or(serde_json::Value::Null);
+    }
+    let mut payload = s.grid.data.clone();
+    if let Some(d) = &s.grid.detail {
+        payload.extend_from_slice(d);
+    }
+    (header, payload)
+}
+
 fn u64s(bytes: &[u8]) -> Vec<u64> {
     bytes.as_chunks::<8>().0.iter().map(|c| u64::from_le_bytes(*c)).collect()
 }

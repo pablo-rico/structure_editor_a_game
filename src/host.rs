@@ -284,7 +284,7 @@ impl Host {
     /// `revision` identifica la versión del documento: las respuestas viejas se descartan.
     pub fn validate(&mut self, revision: u64, s: &Structure, replaces: Option<&crate::agvox::Replaces>) {
         let Some(p) = self.process.as_mut() else { return };
-        let (header, payload) = doc_request(s, replaces);
+        let (header, payload) = crate::bridge::proto::doc_request(s, replaces);
         match p.request("validate", header, &payload) {
             Ok(id) => {
                 self.pending.insert(id, Pending::Validate(revision, Box::new(s.grid.clone())));
@@ -297,7 +297,7 @@ impl Host {
     /// `target` y `floorY`. La respuesta llega como `Reply::Tool(seq, …)`; las viejas se descartan.
     pub fn tool(&mut self, seq: u64, s: &Structure, replaces: Option<&crate::agvox::Replaces>, extra: Value) {
         let Some(p) = self.process.as_mut() else { return };
-        let (mut header, payload) = doc_request(s, replaces);
+        let (mut header, payload) = crate::bridge::proto::doc_request(s, replaces);
         if let (Some(h), Value::Object(e)) = (header.as_object_mut(), extra) {
             h.extend(e);
         }
@@ -531,29 +531,6 @@ impl Host {
     pub fn compile_errors(&self) -> &[CompileError] {
         self.last_compile.as_ref().map_or(&[], |c| &c.errors)
     }
-}
-
-/// Cabecera y carga de un documento para `validate` y `tool` (docs/contrato.md).
-fn doc_request(s: &Structure, replaces: Option<&crate::agvox::Replaces>) -> (Value, Vec<u8>) {
-    let mut header = json!({
-        "size": s.grid.size,
-        "groundLevel": s.ground_level,
-        "bandStarts": s.band_starts,
-        "bandFloors": s.band_floors,
-        "entrance": s.entrance,
-        "courtyard": s.courtyard,
-        "parts": s.parts,
-        "interactables": s.interactables,
-        "hasDetail": s.grid.detail.is_some(),
-    });
-    if let Some(r) = replaces {
-        header["replaces"] = serde_json::to_value(r).unwrap_or(Value::Null);
-    }
-    let mut payload = s.grid.data.clone();
-    if let Some(d) = &s.grid.detail {
-        payload.extend_from_slice(d);
-    }
-    (header, payload)
 }
 
 #[cfg(test)]

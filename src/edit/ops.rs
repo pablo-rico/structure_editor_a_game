@@ -47,6 +47,99 @@ pub fn shaped_box(a: V, b: V, shape: BoxShape) -> Vec<V> {
         .collect()
 }
 
+/// Cilindro (o tubo, con `r_in` > 0) a lo largo del eje `axis` (0 = x, 1 = y, 2 = z), de `lo` a `hi` incluidos:
+/// los vóxeles cuyo centro cae entre `r_in` y `r` del eje, que pasa por `c` (las otras dos coordenadas, en orden).
+/// Un centro entero cae en una esquina de vóxel (diámetro par); uno acabado en ,5, en mitad de un vóxel (impar).
+pub fn cylinder(axis: usize, c: [f32; 2], r: f32, r_in: f32, lo: i32, hi: i32) -> Vec<V> {
+    let (u, w) = match axis {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let mut out = Vec::new();
+    let span = |c: f32| ((c - r).floor() as i32, (c + r).ceil() as i32);
+    let ((u0, u1), (w0, w1)) = (span(c[0]), span(c[1]));
+    for a in lo.min(hi)..=lo.max(hi) {
+        for q in w0..=w1 {
+            for p in u0..=u1 {
+                let d = (p as f32 + 0.5 - c[0]).hypot(q as f32 + 0.5 - c[1]);
+                if d <= r && d >= r_in {
+                    let mut v = [0; 3];
+                    (v[axis], v[u], v[w]) = (a, p, q);
+                    out.push(v);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Sólido de revolución de eje vertical por `(cx, cz)`: una capa por elemento de `profile` (su radio) desde `y0`
+/// hacia arriba. Un cono, una cúpula o un jarrón son solo perfiles distintos.
+pub fn revolve(c: [f32; 2], y0: i32, profile: &[f32]) -> Vec<V> {
+    profile
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| **r > 0.0)
+        .flat_map(|(i, &r)| cylinder(1, c, r, 0.0, y0 + i as i32, y0 + i as i32))
+        .collect()
+}
+
+/// Elipsoide de centro `c` y radios `r`: los vóxeles con el centro dentro.
+pub fn ellipsoid(c: [f32; 3], r: [f32; 3]) -> Vec<V> {
+    let span = |k: usize| ((c[k] - r[k]).floor() as i32, (c[k] + r[k]).ceil() as i32);
+    let ((x0, x1), (y0, y1), (z0, z1)) = (span(0), span(1), span(2));
+    let mut out = Vec::new();
+    for y in y0..=y1 {
+        for z in z0..=z1 {
+            for x in x0..=x1 {
+                let d = |k: usize, v: i32| ((v as f32 + 0.5 - c[k]) / r[k].max(1e-3)).powi(2);
+                if d(0, x) + d(1, y) + d(2, z) <= 1.0 {
+                    out.push([x, y, z]);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Tejado macizo sobre la caja en planta entre `a` y `b` (incluidas; la altura de salida es la menor de las dos):
+/// cada `step` capas se encoge un sub-cubo por lado. A dos aguas (`ridge` = eje de la cumbrera, 0 = x o 2 = z) o a
+/// cuatro (`ridge` = `None`).
+pub fn roof(a: V, b: V, ridge: Option<usize>, step: i32) -> Vec<V> {
+    let (mut lo, mut hi) = ([a[0].min(b[0]), a[2].min(b[2])], [a[0].max(b[0]), a[2].max(b[2])]);
+    let step = step.max(1);
+    let mut out = Vec::new();
+    let mut y = a[1].min(b[1]);
+    while lo[0] <= hi[0] && lo[1] <= hi[1] {
+        for _ in 0..step {
+            out.extend(cuboid([lo[0], y, lo[1]], [hi[0], y, hi[1]]));
+            y += 1;
+        }
+        if ridge != Some(0) {
+            lo[0] += 1;
+            hi[0] -= 1;
+        }
+        if ridge != Some(2) {
+            lo[1] += 1;
+            hi[1] -= 1;
+        }
+    }
+    out
+}
+
+/// Ruido determinista por sub-cubo y semilla (un hash entero): el mismo resultado en cualquier máquina.
+pub fn noise(seed: u32, v: V) -> u32 {
+    let mut h = seed ^ 0x9e37_79b9;
+    for n in v {
+        h = (h ^ n as u32).wrapping_mul(0x85eb_ca6b);
+        h ^= h >> 13;
+        h = h.wrapping_mul(0xc2b2_ae35);
+        h ^= h >> 16;
+    }
+    h
+}
+
 /// Caja semiabierta `[x0, y0, z0, x1, y1, z1)` girada un cuarto de vuelta en una rejilla de fondo `size_z`, con la
 /// regla de `RotateQuarter`: `(x, z) → (size_z − 1 − z, x)`.
 pub fn rotate_box(b: [i32; 6], size_z: i32) -> [i32; 6] {
@@ -279,6 +372,45 @@ mod tests {
         assert_eq!(brush([5, 5, 5], 1), vec![[5, 5, 5]]);
         assert_eq!(mirrored([1, 0, 1], [8, 8, 8], true, true).len(), 4);
         assert_eq!(mirrored([1, 0, 1], [8, 8, 8], false, false), vec![[1, 0, 1]]);
+    }
+
+    #[test]
+    fn formas_redondas_y_tejados() {
+        // Diámetro par (centro en una esquina) e impar (centro en mitad de un vóxel), simétricos.
+        let even = cylinder(1, [4.0, 4.0], 2.0, 0.0, 0, 0);
+        assert_eq!(even.len(), 12);
+        assert!(even.iter().all(|v| even.contains(&[7 - v[0], v[1], 7 - v[2]])));
+        let odd = cylinder(1, [4.5, 4.5], 1.5, 0.0, 0, 2);
+        assert_eq!(odd.len(), 9 * 3);
+        // Tubo: sin el centro. Y tumbado sobre x.
+        assert_eq!(cylinder(1, [4.5, 4.5], 1.5, 1.0, 0, 0).len(), 8);
+        let lying = cylinder(0, [2.5, 2.5], 0.5, 0.0, 3, 5);
+        assert_eq!(lying, vec![[3, 2, 2], [4, 2, 2], [5, 2, 2]]);
+        // Cono por perfil: cada capa, su radio; las de radio 0 no ponen nada.
+        let cone = revolve([4.0, 4.0], 2, &[2.0, 1.0, 0.0]);
+        assert_eq!(cone.iter().filter(|v| v[1] == 2).count(), 12);
+        assert_eq!(cone.iter().filter(|v| v[1] == 3).count(), 4);
+        assert!(cone.iter().all(|v| v[1] < 4));
+        let ball = ellipsoid([4.0, 4.0, 4.0], [3.0, 2.0, 3.0]);
+        assert!(ball.contains(&[3, 3, 3]) && !ball.contains(&[0, 0, 0]));
+        assert!(ball.iter().all(|v| ball.contains(&[7 - v[0], 7 - v[1], 7 - v[2]])));
+        // A cuatro aguas sobre 4×4: capas de 16 y 4. A dos aguas con la cumbrera en x: 4×4 y 4×2.
+        assert_eq!(roof([0, 5, 0], [3, 5, 3], None, 1).len(), 20);
+        let gable = roof([0, 5, 0], [3, 5, 3], Some(0), 1);
+        assert_eq!(gable.len(), 24);
+        assert_eq!(gable.iter().map(|v| v[1]).max(), Some(6));
+        // Con escalón 2, cada capa se repite.
+        assert_eq!(roof([0, 0, 0], [3, 0, 3], None, 2).len(), 40);
+    }
+
+    #[test]
+    fn ruido_determinista() {
+        assert_eq!(noise(7, [1, 2, 3]), noise(7, [1, 2, 3]));
+        assert_ne!(noise(7, [1, 2, 3]), noise(8, [1, 2, 3]));
+        assert_ne!(noise(7, [1, 2, 3]), noise(7, [3, 2, 1]));
+        // Reparte: de 4096 sub-cubos, cerca de la mitad cae en cada lado.
+        let low = cuboid([0, 0, 0], [15, 15, 15]).into_iter().filter(|&v| noise(1, v).is_multiple_of(2)).count();
+        assert!((1800..2300).contains(&low), "{low}");
     }
 
     #[test]

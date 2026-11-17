@@ -124,6 +124,33 @@ impl Doc {
         self.model.is_some()
     }
 
+    /// Huella del contenido (16 cifras hexadecimales): la misma mientras lo que se guarda no cambie. Las recetas la
+    /// usan para saber si alguien ha retocado el fichero (`docs/recetas.md`).
+    pub fn fingerprint(&self) -> String {
+        use crate::vmodel::{FNV_SEED, fnv1a};
+        let h = match &self.model {
+            Some(m) => crate::vmodel::fingerprint(m, &self.s),
+            None => {
+                let mut h = FNV_SEED;
+                for n in self.s.grid.size {
+                    fnv1a(&mut h, &n.to_le_bytes());
+                }
+                fnv1a(&mut h, &self.s.grid.data);
+                // Sin detalle o con el detalle a cero es lo mismo (el `.agvox` no lo guarda si está vacío).
+                if let Some(d) = self.s.grid.detail.as_ref().filter(|d| d.iter().any(|&b| b != 0)) {
+                    fnv1a(&mut h, d);
+                }
+                let e = self.extras();
+                let rest = serde_json::json!([
+                    e.ground_level, e.band_starts, e.band_floors, e.entrance[0], e.courtyard, e.parts, e.interactables
+                ]);
+                fnv1a(&mut h, rest.to_string().as_bytes());
+                h
+            }
+        };
+        format!("{h:016x}")
+    }
+
     /// Color (byte de rejilla) de la cara `dir` del vóxel `v`: el propio o el de su vóxel.
     pub fn face_color(&self, v: [i32; 3], dir: u8) -> u8 {
         self.s.face_colors.get(&face_key(v, dir)).copied().unwrap_or_else(|| self.s.grid.get(v[0], v[1], v[2]))

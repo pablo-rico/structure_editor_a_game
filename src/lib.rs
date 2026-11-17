@@ -3,6 +3,7 @@
 pub mod agvox;
 pub mod app;
 pub mod bridge;
+pub mod cli;
 pub mod edit;
 pub mod editor;
 pub mod host;
@@ -12,6 +13,7 @@ pub mod model;
 pub mod params;
 pub mod pick;
 pub mod platform;
+pub mod recipe;
 pub mod render;
 pub mod theme;
 pub mod ui;

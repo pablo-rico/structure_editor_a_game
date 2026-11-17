@@ -36,7 +36,8 @@ pub struct Editor {
     /// Lo último que se ha mandado a dibujar.
     pub shown: Option<(u64, Arc<Structure>)>,
     pub exporting: bool,
-    /// Modelos: fecha y tamaño del fichero al abrirlo o guardarlo (para saber si otro lo ha cambiado).
+    /// Fecha y tamaño del fichero al abrirlo o guardarlo (para saber si otro lo ha cambiado: un script de arte,
+    /// `cantero`, git…).
     disk: Option<(SystemTime, u64)>,
     /// Modelos: tamaño con que se abrió y si aún no existía en el juego (avisos de Validación).
     opened_size: Option<[i32; 3]>,
@@ -64,9 +65,16 @@ impl Default for Editor {
     }
 }
 
+/// Carpeta de las fuentes de arte del juego: `Assets/_Game/ArtSource~` (Unity no importa las carpetas acabadas en
+/// `~`) si existe, o `ArtSource` en la raíz, donde estaban antes.
+pub fn art_source(agame_root: &Path) -> PathBuf {
+    let inside = agame_root.join("Assets/_Game/ArtSource~");
+    if inside.is_dir() { inside } else { agame_root.join("ArtSource") }
+}
+
 /// Carpeta de las fuentes `.agvox` dentro del juego (regla de a_game: fuentes en ArtSource).
 pub fn source_dir(agame_root: &Path) -> PathBuf {
-    agame_root.join("ArtSource/Structures")
+    art_source(agame_root).join("Structures")
 }
 
 /// Nombre de fichero a partir del nombre visible: minúsculas, sin acentos, `_` entre palabras.
@@ -138,7 +146,7 @@ fn disk_stamp(path: &Path) -> Option<(SystemTime, u64)> {
 }
 
 /// `.meta` de Unity para un `_model.json` nuevo (los que ya existen no se tocan: el juego los enlaza por su GUID).
-fn unity_meta() -> String {
+pub fn unity_meta() -> String {
     use std::hash::{BuildHasher, Hasher};
     // Dos hashes con semilla aleatoria del sistema: 128 bits sin añadir dependencias.
     let part = || std::collections::hash_map::RandomState::new().build_hasher().finish();
@@ -150,37 +158,44 @@ fn unity_meta() -> String {
 }
 
 /// Escribe `text` en `path` sin dejarlo a medias (temporal en la misma carpeta y renombrar).
-fn write_atomic(path: &Path, text: &str) -> Result<()> {
+pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let tmp = PathBuf::from(format!("{}.tmp", path.display()));
     std::fs::write(&tmp, text).with_context(|| format!("no puedo escribir {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("no puedo escribir {}", path.display()))
 }
 
-impl Editor {
-    /// Documento nuevo: `w`×`d` celdas y `levels` niveles, con un forjado de cimientos de piedra en el nivel 0.
-    pub fn new_doc(&mut self, cat: &Catalog, w: i32, d: i32, levels: i32) {
-        let mut grid = VoxelGrid::new([w * SUB, levels * SUB, d * SUB]);
-        let stone = cat.materials.iter().position(|m| m == "Stone").unwrap_or(1) as u8;
-        for z in 0..grid.size[2] {
-            for x in 0..grid.size[0] {
-                for y in 0..SUB {
-                    grid.set(x, y, z, stone);
-                }
+/// Estructura nueva: `w`×`d` celdas y `levels` niveles, con un forjado de cimientos de piedra en el nivel 0 y el
+/// primer estilo del catálogo.
+pub fn blank_structure(cat: &Catalog, w: i32, d: i32, levels: i32) -> (Meta, Structure) {
+    let mut grid = VoxelGrid::new([w * SUB, levels * SUB, d * SUB]);
+    let stone = cat.materials.iter().position(|m| m == "Stone").unwrap_or(1) as u8;
+    for z in 0..grid.size[2] {
+        for x in 0..grid.size[0] {
+            for y in 0..SUB {
+                grid.set(x, y, z, stone);
             }
         }
-        let s = Structure {
-            grid,
-            ground_level: 1,
-            band_starts: vec![SUB],
-            band_floors: vec![1],
-            entrance: [w / 2, -1],
-            ..Default::default()
-        };
-        let style = cat.styles.first().map_or_else(String::new, |s| s.name.clone());
-        self.set_doc(Doc::new(Meta { name: "Estructura nueva".into(), style, ..Default::default() }, s, None));
+    }
+    let s = Structure {
+        grid,
+        ground_level: 1,
+        band_starts: vec![SUB],
+        band_floors: vec![1],
+        entrance: [w / 2, -1],
+        ..Default::default()
+    };
+    let style = cat.styles.first().map_or_else(String::new, |s| s.name.clone());
+    (Meta { name: "Estructura nueva".into(), style, ..Default::default() }, s)
+}
+
+impl Editor {
+    /// Documento nuevo (ver [`blank_structure`]).
+    pub fn new_doc(&mut self, cat: &Catalog, w: i32, d: i32, levels: i32) {
+        let (meta, s) = blank_structure(cat, w, d, levels);
+        self.set_doc(Doc::new(meta, s, None));
     }
 
     /// «Duplicar para editar»: parte de una estructura procedural (construida sin girar, intacta y con estado 0).
@@ -245,11 +260,26 @@ impl Editor {
         }
     }
 
-    /// El fichero del modelo abierto ya no es el que se abrió o guardó (un script de arte, git…).
+    /// El fichero abierto ya no es el que se abrió o guardó (un script de arte, `cantero`, git…).
     pub fn changed_on_disk(&self) -> bool {
-        match self.doc.as_ref().filter(|d| d.is_model()).and_then(|d| d.path.as_ref()) {
+        match self.doc.as_ref().and_then(|d| d.path.as_ref()) {
             Some(path) => self.disk.is_some() && disk_stamp(path) != self.disk,
             None => false,
+        }
+    }
+
+    /// Vuelve a abrir el documento desde su fichero (lo que hubiera sin guardar se pierde). Si no se puede leer, lo
+    /// abierto se queda como estaba.
+    pub fn reload(&mut self, materials: &[String]) -> Result<()> {
+        let doc = self.doc.as_ref().context("no hay nada abierto")?;
+        let path = doc.path.clone().context("el documento no tiene fichero")?;
+        if doc.is_model() { self.open_model(&path) } else { self.open(&path, materials) }
+    }
+
+    /// Da por visto lo que hay en disco (para no volver a avisar del mismo cambio).
+    pub fn seen_on_disk(&mut self) {
+        if let Some(path) = self.doc.as_ref().and_then(|d| d.path.as_ref()) {
+            self.disk = disk_stamp(path);
         }
     }
 
@@ -273,6 +303,7 @@ impl Editor {
         let text = std::fs::read_to_string(path).with_context(|| format!("no puedo leer {}", path.display()))?;
         let (meta, s) = agvox::load(&text, materials)?;
         self.set_doc(Doc::new(meta, s, Some(path.to_path_buf())));
+        self.disk = disk_stamp(path);
         Ok(())
     }
 
@@ -296,12 +327,11 @@ impl Editor {
             return Ok(path);
         }
         let text = agvox::save(&doc.meta, &doc.s, materials)?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(&path, text).with_context(|| format!("no puedo escribir {}", path.display()))?;
+        // Sin dejarlo a medias: otro proceso (cantero, la recarga) puede leerlo mientras tanto.
+        write_atomic(&path, &text)?;
         doc.path = Some(path.clone());
         doc.unsaved = false;
+        self.disk = disk_stamp(&path);
         Ok(path)
     }
 
@@ -407,6 +437,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn las_fuentes_estan_donde_las_tenga_el_juego() {
+        let root = std::env::temp_dir().join(format!("agame-fuentes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(source_dir(&root), root.join("ArtSource/Structures"));
+        std::fs::create_dir_all(root.join("Assets/_Game/ArtSource~")).unwrap();
+        assert_eq!(source_dir(&root), root.join("Assets/_Game/ArtSource~/Structures"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn nombres_de_fichero() {
         assert_eq!(slug("Torre del Puerto"), "torre_del_puerto");
         assert_eq!(slug("Señal ¡Única!"), "senal_unica");
@@ -483,6 +523,41 @@ mod tests {
         std::fs::write(&path, format!("{text}\n")).unwrap();
         assert!(ed.changed_on_disk());
         ed.save(None, &[]).unwrap();
+        assert!(!ed.changed_on_disk());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn recarga_lo_que_cambia_en_disco() {
+        let dir = std::env::temp_dir().join(format!("agvox-recarga-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mats: Vec<String> = vec!["Air".into(), "Stone".into()];
+        let path = dir.join("torre.agvox");
+        let mut s = Structure { grid: VoxelGrid::new([8, 8, 8]), ..Default::default() };
+        let meta = Meta { name: "Torre".into(), ..Default::default() };
+        std::fs::write(&path, agvox::save(&meta, &s, &mats).unwrap()).unwrap();
+        let mut ed = Editor::default();
+        ed.open(&path, &mats).unwrap();
+        assert!(!ed.changed_on_disk());
+        // Otro proceso (cantero) lo reescribe: se nota y se recarga.
+        s.grid.set(1, 2, 3, 1);
+        std::fs::write(&path, agvox::save(&Meta { name: "Torre más alta".into(), ..meta }, &s, &mats).unwrap()).unwrap();
+        assert!(ed.changed_on_disk());
+        ed.reload(&mats).unwrap();
+        assert!(!ed.changed_on_disk());
+        let doc = ed.doc.as_ref().unwrap();
+        assert_eq!((doc.s.grid.get(1, 2, 3), doc.meta.name.as_str(), doc.unsaved), (1, "Torre más alta", false));
+        // Guardar desde aquí no cuenta como cambio de fuera, y no deja temporales.
+        ed.doc.as_mut().unwrap().paint(0, 0, 0, 1, false);
+        ed.save(None, &mats).unwrap();
+        assert!(!ed.changed_on_disk());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        // Un fichero roto no cierra lo abierto; darlo por visto deja de avisar.
+        std::fs::write(&path, "roto").unwrap();
+        assert!(ed.changed_on_disk() && ed.reload(&mats).is_err());
+        assert_eq!(ed.doc.as_ref().unwrap().s.grid.get(0, 0, 0), 1);
+        ed.seen_on_disk();
         assert!(!ed.changed_on_disk());
         std::fs::remove_dir_all(&dir).unwrap();
     }

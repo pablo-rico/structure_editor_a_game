@@ -3,6 +3,8 @@ name = "structure_editor_a_game"
 version = "0.2.0"
 edition = "2024"
 description = "Editor de estructuras de sub-cubos de a_game"
+# `cargo run` sigue abriendo el editor; el de línea de comandos es `cargo run --bin cantero`.
+default-run = "structure_editor_a_game"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -16,6 +18,7 @@ glam = "0.34.3"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 notify = "8"
 rfd = "0.18.0"
+rhai = { version = "1.27.0", features = ["metadata"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 

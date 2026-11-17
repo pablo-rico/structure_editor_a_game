@@ -16,6 +16,7 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
 - **Diseño:** `docs/diseno-gui.md` («Taller de cantero»). Ningún color suelto: todo sale de `src/theme.rs`. El dorado
   solo marca lo activo; nada de jerga ni nombres de enum en pantalla; tooltips en todo lo que es un icono.
 - **Sin mocks ni capas «por si acaso»:** el código va contra el puente real o contra `fixtures/`.
+- **Para hacer o retocar una estructura o un modelo** (no el editor): la skill `cantero` (`.claude/skills/cantero/`).
 - Commits solo cuando el usuario lo pida. En a_game, en una rama y con sus reglas (`../a_game/CLAUDE.md`).
 
 ## Comandos
@@ -32,6 +33,10 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
     las 5 muestras de paridad y el fragmento para `unity command eval` con Unity abierto.
   - `dump fixtures`: rehace `fixtures/` (deterministas, `ms` = 0). Hazlo si cambias el catálogo o la carga.
   - `serve`: lo que lanza el editor.
+- `cantero`, el editor sin ventana (`docs/recetas.md`): `cargo run --bin cantero -- info|render|capas|run|export|
+  catalog|api|vista`. `vista <modelo>` = cómo se ve en el juego (un vóxel ≈ un píxel, luz lisa, contorno; en CPU). `run <receta> --salida <carpeta> --render --out <png>` = receta → fichero → lámina, sin tocar el juego.
+  `cargo test --test cli -- --ignored` prueba la lámina (tarjeta gráfica). Si cambias `src/recipe/api.rs`, rehaz la
+  referencia de la skill: `cargo run --bin cantero -- api > .claude/skills/cantero/referencia.md` (lo vigila un test).
 - Visor suelto: `cargo run --example visor` (ventana), `-- --shots` (PNG de las fixtures en `target-render/shots/`),
   `-- --egui` (un fotograma real de `Viewport::ui`).
 - **Ver la app sin permiso de grabación de pantalla:** `EDITOR_CAPTURA=/ruta.png [EDITOR_TIPO=Shop]
@@ -61,6 +66,11 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
 - `src/agvox.rs`: formato `.agvox`. `src/edit/`: `Doc` (historial de diferencias dispersas por trazo, `version`),
   `ops` (formas, relleno, extruir, portapapeles con el giro de `RotateQuarter`), `tools` (máquina de estados de las
   herramientas). `src/editor.rs`: documento abierto, guardar/abrir, validación en vivo (300 ms), exportar, recuperación.
+- `src/cli/` (`cantero`, binario en `src/bin/cantero.rs`): órdenes, `Game` (carpeta del juego y generador solo si
+  hace falta), abrir y describir documentos, rebanadas en texto. `src/recipe/`: motor Rhai de las recetas (`mod.rs` =
+  lienzo sobre `Doc`, guardas por huella, resumen; `api.rs` = funciones registradas y su referencia).
+  `src/render/sheet.rs`: lámina de vistas con reglas (letra de mapa de bits propia). `src/bridge/client.rs`: cliente
+  síncrono del puente (`cantero` y tests vivos; la app sigue con `Host`).
 - `src/platform.rs`: carpeta de datos y personal, mostrar en el explorador, procesos sin consola en Windows.
 - `src/vox.rs`: MagicaVoxel (`dot_vox`): leer juntando modelos, asociar colores a materiales, escribir. Ejes: Y del
   `.vox` = −Z del juego, Z del `.vox` = Y del juego (sin reflejar).
@@ -72,7 +82,9 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
   `Assets/_Game/Scripts/{Shared,Lang,Core,World,Generation}` + `Rendering/Terrain3D/StructurePalette.cs` y
   `bridge/src/{Program,Catalog,Builder,Checks,Authored}.cs`. Referencia `UnityEngine.CoreModule.dll` de la instalación
   de Unity y `Unity.{Mathematics,Collections}.dll` de `a_game/Library/ScriptAssemblies`.
-- `docs/`: `contrato.md`, `diseno-gui.md`. `assets/fonts/`: Atkinson (dentro del binario con `include_bytes!`).
+- `docs/`: `contrato.md`, `diseno-gui.md`, `recetas.md`. `.claude/skills/cantero/`: cómo trabaja Claude Code con
+  `cantero` (`SKILL.md`) y la referencia de las recetas (`referencia.md`, generada). `fixtures/recetas/`: receta de
+  ejemplo y de los tests. `assets/fonts/`: Atkinson (dentro del binario con `include_bytes!`).
 
 ## Cosas que ya nos han mordido
 
@@ -111,6 +123,18 @@ se exportan al juego como `StructureKind.Authored`). Uso y requisitos: `README.m
   sin `VoxelTone` (`Paint.flat`); el camino de las estructuras no cambia. Un vóxel de modelo se dibuja como un
   sub-cubo (el doble de grande que en el juego): solo la rejilla y el pincel «Celda» leen `Structure::cell_size`.
   Editar exige el catálogo del generador también para modelos.
+- **Recetas y `cantero`:** las cajas de las recetas son semiabiertas (como `--caja` y las cajas de partes); las de
+  `ops` y `Clip::copy`, de esquinas incluidas. La huella de un modelo sale de las caras expuestas con su color final
+  y el «repintado» del resumen también: el byte de un vóxel no sirve para comparar entre guardar y abrir (la paleta se
+  compacta y el color de un vóxel leído es el más frecuente de sus caras). El sombreado de `tones`/`shaded` se aplica
+  al final (`vmodel::shade` + `paint_face`): `Doc::paint` borra los colores propios. `render::Offscreen` con
+  `fill = true` no es pixel-perfect (solo la lámina); alzado y planta son `Projection::Iso` con elevación 0° y 90°.
+  Las funciones de receta reciben `Dynamic` (un 4 y un 4.5 valen donde va un número): se registran con la macro
+  `def!`. `cantero export` escribe en a_game: no lo lances en pruebas contra el árbol de otra sesión.
+- **Fuentes de arte del juego:** `editor::art_source` = `Assets/_Game/ArtSource~/` si existe y si no `ArtSource/`
+  (a_game las está moviendo). `source_dir` (los `.agvox`) y las recetas cuelgan de ahí: no escribas la ruta a mano.
+- **Recarga automática:** `Editor::changed_on_disk` vale ya para `.agvox` y modelos; `App::poll_disk` sondea cada
+  500 ms. Guardar es atómico (`editor::write_atomic`) para que quien recarga no lea medio fichero.
 - **Fixtures:** ~9 MB (`schooltower.bin` es 7,6 MB). No las rehagas sin motivo.
 
 ## Publicar una versión
